@@ -4,5 +4,5 @@
     "lib": ["ES2023", "DOM"],
     "types": ["node"]
   },
-  "include": ["scripts", "bench"]
+  "include": ["scripts", "bench", "e2e", "playwright.config.ts"]
 }

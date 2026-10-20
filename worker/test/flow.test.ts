@@ -221,6 +221,24 @@ describe('an order from start to approval', () => {
     });
     expect(approved.status).toBe(200);
     expect((await view(id)).order.status).toBe('approved');
+
+    // Round 3, on request: Bhaav tells the chosen supplier, quoting their own terms.
+    const confirm = await send(`/api/requests/${id}/confirm`, { method: 'POST' });
+    expect(confirm.status).toBe(200);
+    expect(bolna.placed).toHaveLength(7);
+    expect(bolna.placed[6]?.user_data).toMatchObject({
+      round: '3',
+      best_offer: '₹31 per kilo',
+      supplier_name: 'Supplier 1',
+      agent_language: 'hi',
+    });
+    const again = await send(`/api/requests/${id}/confirm`, { method: 'POST' });
+    expect(again.status).toBe(409);
+    expect(bolna.placed).toHaveLength(7);
+    // A finished confirmation call changes nothing else.
+    await webhook({ id: bolna.exec(7), status: 'completed' });
+    expect((await view(id)).order.status).toBe('approved');
+    expect(bolna.placed).toHaveLength(7);
   });
 
   it('refuses to start until the order and supplier list are complete', async () => {
@@ -299,6 +317,71 @@ describe('an order from start to approval', () => {
     await sweep(env);
     expect(bolna.placed).toHaveLength(2);
     expect((await view(id)).calls[0]?.transcript).toBe('polled');
+  });
+});
+
+describe('price memory', () => {
+  it("remembers each order's best price per item and shows it on the next order", async () => {
+    const bolna = fakeBolna();
+    const item = `basmati ${crypto.randomUUID().slice(0, 6)}`;
+    const order = async (price: string) => {
+      const id = await newOrder(1);
+      await send(`/api/requests/${id}`, { method: 'PATCH', json: { item } });
+      await send(`/api/requests/${id}/start`, { method: 'POST' });
+      const callRef = bolna.placed.at(-1)?.user_data.call_ref ?? '';
+      await tool('save_quote', {
+        call_ref: callRef,
+        price,
+        unit: 'kilo',
+        supplier_words: `${price} rupaye kilo`,
+      });
+      await webhook({ id: bolna.exec(bolna.placed.length), status: 'completed' });
+      return id;
+    };
+    const first = await order('82');
+    const second = await order('79');
+
+    const history = (await view(second)).history;
+    expect(history.map((p) => [p.requestId, p.perUnit])).toEqual([[first, 82]]);
+
+    const series = await (await send('/api/prices')).json<
+      Array<{ item: string; unit: string; points: Array<{ perUnit: number }> }>
+    >();
+    const mine = series.find((s) => s.item === item);
+    expect(mine?.unit).toBe('kg');
+    expect(mine?.points.map((p) => p.perUnit)).toEqual([82, 79]);
+  });
+
+  it('never counts practice orders', async () => {
+    fakeBolna();
+    const res = await send('/api/web-session', {
+      method: 'POST',
+      json: { kind: 'practice', personaId: 'rice' },
+    });
+    expect(res.status).toBe(200);
+    const series = await (await send('/api/prices')).json<Array<{ item: string }>>();
+    expect(series.some((s) => s.item === 'basmati rice')).toBe(false);
+  });
+});
+
+describe('languages', () => {
+  it("starts a Kannada supplier's call in Kannada", async () => {
+    const bolna = fakeBolna();
+    const { id } = await (
+      await send('/api/requests', { method: 'POST', json: { buyerName: 'Ravi' } })
+    ).json<{ id: string }>();
+    await send(`/api/requests/${id}`, {
+      method: 'PATCH',
+      json: { item: 'tomatoes', quantity: 20, unit: 'kg', deliverBy: '2026-10-23' },
+    });
+    const phone = `9${String(Date.now()).slice(-9)}`;
+    const added = await send(`/api/requests/${id}/suppliers`, {
+      method: 'POST',
+      json: { name: 'Kannada Mandi', phone, language: 'kn', consentNote: 'agreed' },
+    });
+    expect(added.status).toBe(201);
+    await send(`/api/requests/${id}/start`, { method: 'POST' });
+    expect(bolna.placed[0]?.user_data).toMatchObject({ language: 'Kannada', agent_language: 'kn' });
   });
 });
 

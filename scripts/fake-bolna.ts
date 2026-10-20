@@ -49,6 +49,17 @@ async function playCall(id: string, phone: string, userData: Record<string, stri
   await sleep(1500);
   await webhook('in-progress');
 
+  // Round 3 is the confirmation call: the supplier hears they were chosen and keeps their quote.
+  if (userData.round === '3') {
+    console.log(`  ${userData.supplier_name}: confirmed, no new quote`);
+    await sleep(2000);
+    await webhook('completed', {
+      transcript: `assistant: Namaste ji, ${userData.buyer_name} ne aapka quote chuna hai.\nuser: haan ji, theek hai, bhej denge\nassistant: Dhanyavaad ji.`,
+      telephony_data: { recording_url: null },
+    });
+    return;
+  }
+
   const mine = basePrice(phone);
   const offer = Number((userData.best_offer ?? '').replace(/[^\d.]/g, '')) || null;
   const round2 = userData.round === '2';

@@ -14,6 +14,7 @@ import {
   suppliers,
 } from './db/schema';
 import { landedPrice, UNIT_WORDS } from './engine';
+import { historyFor } from './prices';
 
 const UNIT_SYNONYMS: Record<string, Unit> = {};
 const synonyms: Array<[Unit, string]> = [
@@ -234,5 +235,6 @@ export async function orderView(db: Db, requestId: string): Promise<OrderView | 
       request.status === 'draft'
         ? missingFor(request, supplierRows.filter((s) => !s.doNotCall).length)
         : [],
+    history: request.isPractice ? [] : await historyFor(db, request),
   };
 }

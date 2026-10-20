@@ -126,3 +126,29 @@ describe('unbackedNumbers', () => {
     expect(unbackedNumbers('₹19.33 per kilo', allowedSet([19.333333]))).toEqual([]);
   });
 });
+
+describe('findNumbers: Kannada', () => {
+  it('reads Kannada digits', () => {
+    expect(numbersIn('₹೩೨ ಕೆಜಿಗೆ')).toEqual([32]);
+  });
+
+  it('reads joined Kannada numbers in script and romanised', () => {
+    expect(findNumbers('ಮೂವತ್ತೆರಡು ರೂಪಾಯಿ')).toEqual([{ value: 32, text: 'ಮೂವತ್ತೆರಡು', price: true }]);
+    expect(numbersIn('ಇಪ್ಪತ್ತಮೂರು')).toEqual([23]);
+    expect(numbersIn('ತೊಂಬತ್ತೊಂಬತ್ತು')).toEqual([99]);
+    expect(numbersIn('moovatteradu rupayi')).toEqual([32]);
+    expect(numbersIn('ippattamooru')).toEqual([23]);
+  });
+
+  it('reads Kannada teens, spaced tens and multipliers', () => {
+    expect(numbersIn('ಹದಿನೈದು')).toEqual([15]);
+    expect(numbersIn('moovattu eradu')).toEqual([32]);
+    expect(numbersIn('ಎರಡು ನೂರು')).toEqual([200]);
+    expect(numbersIn('ಒಂದು ಸಾವಿರ ಆರು ನೂರು')).toEqual([1600]);
+  });
+
+  it('flags an unbacked Kannada price', () => {
+    const bad = unbackedNumbers('ಬೇರೆ ಅಂಗಡಿ ಇಪ್ಪತ್ತೆಂಟು ರೂಪಾಯಿ ಹೇಳಿದೆ', allowedSet([31]));
+    expect(bad.map((n) => n.value)).toEqual([28]);
+  });
+});

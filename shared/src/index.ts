@@ -63,7 +63,7 @@ export const UNITS = [
 ] as const;
 export type Unit = (typeof UNITS)[number];
 
-export const LANGUAGES = ['hi', 'en'] as const;
+export const LANGUAGES = ['hi', 'en', 'kn'] as const;
 export type Language = (typeof LANGUAGES)[number];
 
 export interface Order {
@@ -160,6 +160,23 @@ export interface RankedQuote {
   reasons: Array<'unit' | 'min_quantity' | 'late'>;
 }
 
+/** One past order's best landed price for an item. */
+export interface PricePoint {
+  requestId: string;
+  /** Epoch ms of the winning quote. */
+  date: number;
+  perUnit: number;
+  supplierName: string;
+}
+
+/** Every past order's best price for one item and unit, oldest first. */
+export interface PriceSeries {
+  item: string;
+  unit: Unit;
+  points: PricePoint[];
+  quotes: number;
+}
+
 export interface OrderView {
   order: OrderDto;
   suppliers: SupplierDto[];
@@ -173,6 +190,8 @@ export interface OrderView {
   highestPerUnit: number | null;
   /** What still stops calls from starting. Empty when ready. */
   missing: string[];
+  /** Earlier orders of the same item and unit: each one's best price, oldest first. */
+  history: PricePoint[];
 }
 
 export interface Persona {

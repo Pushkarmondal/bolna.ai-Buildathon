@@ -3,10 +3,10 @@
 import type { Persona } from '@bhaav/shared';
 import { useQuery } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
-import { Link } from 'react-router';
 import { api, type PracticeReview, usePersonas } from '../api';
 import { rupees } from '../format';
-import { Button, Card, Notice, PageTitle, Pill, VoiceMeter } from '../ui';
+import { ArrowRight, Lightbulb, PhoneDisconnect, ShieldCheck, Storefront, Timer } from '../icons';
+import { Button, ButtonLink, Card, Notice, PageTitle, Pill, VoiceMeter } from '../ui';
 import { useWebCall } from '../webcall';
 
 const LIMIT_SECONDS = 120;
@@ -46,55 +46,60 @@ export function PlayPage() {
   return (
     <>
       <PageTitle
+        eyebrow="Practice"
         title="Be the supplier"
-        sub="Pick a supplier to play. Bhaav will call you in the browser with a real competing offer. Try to make it say a price it can't prove."
-        aside={<Pill tone="warn">Practice: pretend supplier</Pill>}
+        sub="Pick a supplier to play. Bhaav calls you in the browser holding a real competing offer. Try to make it say a price it can't prove."
+        aside={<Pill tone="warn">Pretend supplier, no real calls</Pill>}
       />
 
       {chosen && (call.state !== 'idle' || call.error) && (
-        <div className="mb-4">
+        <div className="mb-6">
           <Card
             title={`You are ${chosen.supplierName}`}
+            icon={Storefront}
             aside={
               call.active ? (
-                <Pill tone="live" pulse>
-                  {call.state === 'active' ? `${LIMIT_SECONDS - seconds}s left` : 'Connecting…'}
+                <Pill tone="info" pulse icon={Timer}>
+                  <span className="tabular">
+                    {call.state === 'active' ? `${LIMIT_SECONDS - seconds}s left` : 'Connecting…'}
+                  </span>
                 </Pill>
               ) : call.error && call.state === 'idle' ? (
-                <Pill tone="bad">Did not connect</Pill>
+                <Pill tone="danger">Did not connect</Pill>
               ) : (
                 <Pill>Call ended</Pill>
               )
             }
           >
-            <div className="grid gap-3 text-sm sm:grid-cols-3">
-              <div>
-                <div className="text-stone-500">Your opening</div>
-                <div className="font-medium">{chosen.opening}</div>
+            <dl className="grid gap-3 sm:grid-cols-3">
+              <div className="rounded-xl bg-muted p-3">
+                <dt className="text-sm text-muted-fg">Your opening</dt>
+                <dd className="font-medium">{chosen.opening}</dd>
               </div>
-              <div>
-                <div className="text-stone-500">Your secret floor</div>
-                <div className="font-medium">{chosen.floor}</div>
+              <div className="rounded-xl bg-muted p-3">
+                <dt className="text-sm text-muted-fg">Your secret floor</dt>
+                <dd className="font-medium">{chosen.floor}</dd>
               </div>
-              <div>
-                <div className="text-stone-500">Bhaav's real offer</div>
-                <div className="font-medium">{chosen.bestOffer}</div>
+              <div className="rounded-xl bg-muted p-3">
+                <dt className="text-sm text-muted-fg">Bhaav's real offer</dt>
+                <dd className="tabular font-medium">{chosen.bestOffer}</dd>
               </div>
-            </div>
-            <p className="mt-3 text-sm text-stone-600 dark:text-stone-400">
-              Try this: {chosen.tip}
+            </dl>
+            <p className="mt-3 flex items-start gap-2 text-sm text-muted-fg">
+              <Lightbulb size={18} className="mt-0.5 shrink-0 text-warn" aria-hidden />
+              <span>Try this: {chosen.tip}</span>
             </p>
             {call.active && (
-              <div className="mt-3 flex flex-col gap-3">
+              <div className="mt-4 flex flex-col gap-3">
                 <VoiceMeter level={call.volume} />
-                <Button variant="danger" onClick={call.stop}>
+                <Button variant="danger" size="lg" icon={PhoneDisconnect} onClick={call.stop}>
                   Hang up
                 </Button>
               </div>
             )}
             {call.error && (
-              <div className="mt-3">
-                <Notice tone="bad">{call.error}</Notice>
+              <div className="mt-4">
+                <Notice tone="danger">{call.error}</Notice>
               </div>
             )}
           </Card>
@@ -109,32 +114,41 @@ export function PlayPage() {
         />
       )}
 
-      <div className="grid gap-4 md:grid-cols-3">
-        {personas.isPending && <p className="text-stone-500">Loading suppliers…</p>}
-        {personas.error && <Notice tone="bad">{personas.error.message}</Notice>}
+      {personas.isPending && <p className="text-muted-fg">Loading suppliers…</p>}
+      {personas.error && <Notice tone="danger">{personas.error.message}</Notice>}
+      <ul className="grid gap-4 md:grid-cols-3">
         {personas.data?.map((p) => (
-          <Card key={p.id} title={p.supplierName}>
-            <p className="text-sm text-stone-600 dark:text-stone-400">
+          <li
+            key={p.id}
+            className="flex flex-col rounded-2xl border border-border bg-card p-4 sm:p-5"
+          >
+            <h2 className="flex items-center gap-2 text-lg font-semibold">
+              <Storefront size={20} weight="duotone" className="text-primary" aria-hidden />
+              {p.supplierName}
+            </h2>
+            <p className="mt-1 text-muted-fg">
               Bhaav wants {p.quantity} {p.unit === 'kg' ? 'kilo' : p.unit} of {p.item}.
             </p>
-            <ul className="my-3 space-y-1 text-sm">
+            <ul className="my-4 flex flex-col gap-1 text-sm">
               <li>{p.opening}</li>
               <li>{p.floor}</li>
-              <li className="text-stone-500">Bhaav holds a real offer of {p.bestOffer}.</li>
+              <li className="text-muted-fg">Bhaav holds a real offer of {p.bestOffer}.</li>
             </ul>
             <Button
-              className="w-full"
+              className="mt-auto w-full"
+              variant="primary"
               busy={call.active && chosen?.id === p.id}
-              disabled={call.active}
-              onClick={() => take(p)}
+              onClick={() => (call.active ? undefined : take(p))}
+              aria-disabled={call.active && chosen?.id !== p.id ? true : undefined}
             >
               Take Bhaav's call
             </Button>
-          </Card>
+          </li>
         ))}
-      </div>
-      <p className="mt-4 text-sm text-stone-500">
-        Calls stop after 2 minutes. Practice orders are labelled practice and never call anyone.
+      </ul>
+      <p className="mt-4 text-sm text-muted-fg">
+        Calls stop after 2 minutes. Practice orders are labelled practice, never call anyone, and
+        never count in price memory.
       </p>
     </>
   );
@@ -165,27 +179,30 @@ function Review({
   const blocked = review?.blocked ?? [];
 
   return (
-    <div className="mb-6 grid gap-4 lg:grid-cols-[2fr_3fr]">
+    <div className="mb-6 grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
       <Card
         title="What the lie-catcher did"
-        aside={<Pill tone={blocked.length ? 'bad' : 'good'}>{blocked.length} blocked</Pill>}
+        icon={ShieldCheck}
+        aside={<Pill tone={blocked.length ? 'danger' : 'success'}>{blocked.length} stopped</Pill>}
       >
         {blocked.length === 0 ? (
-          <p className="text-sm text-stone-600 dark:text-stone-400">
-            Nothing to block: every number Bhaav said came from the quote book or from you.
+          <p className="text-muted-fg">
+            Nothing to stop: every number Bhaav said came from the quote book or from you.
           </p>
         ) : (
           <ul className="flex flex-col gap-2">
             {blocked.map((b) => (
               <li
                 key={b.createdAt}
-                className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-900 dark:border-red-900 dark:bg-red-950/40 dark:text-red-100"
+                className="rounded-xl border border-danger/30 bg-danger-soft px-3 py-2.5 text-sm text-danger"
               >
-                {b.type === 'blocked'
-                  ? `Stopped Bhaav from saying ${((b.detail?.unbacked as number[] | undefined) ?? []).map((n) => rupees(n)).join(', ')}.`
-                  : 'Stopped Bhaav from saving a price you never said.'}
+                <p className="font-semibold">
+                  {b.type === 'blocked'
+                    ? `Stopped Bhaav from saying ${((b.detail?.unbacked as number[] | undefined) ?? []).map((n) => rupees(n)).join(', ')}.`
+                    : 'Stopped Bhaav from saving a price you never said.'}
+                </p>
                 {typeof b.detail?.sentence === 'string' && (
-                  <div className="mt-0.5 opacity-80">"{b.detail.sentence}"</div>
+                  <p className="mt-0.5">“{b.detail.sentence}”</p>
                 )}
               </li>
             ))}
@@ -193,38 +210,31 @@ function Review({
         )}
         {review?.quotes && review.quotes.length > 0 && (
           <div className="mt-4 text-sm">
-            <div className="font-medium">Quotes Bhaav saved from you</div>
-            <ul className="mt-1 list-disc pl-5 text-stone-600 dark:text-stone-400">
+            <p className="font-medium">Quotes Bhaav saved from you</p>
+            <ul className="mt-1 list-disc pl-5 text-muted-fg">
               {review.quotes.map((q) => (
-                <li key={`${q.price}-${q.supplierWords}`}>
-                  {rupees(q.price)} per {q.packSize ? `${q.packSize}-unit pack` : q.unit}: "
-                  {q.supplierWords}"
+                <li key={`${q.price}-${q.supplierWords}`} className="tabular">
+                  {rupees(q.price)} per {q.packSize ? `${q.packSize}-unit pack` : q.unit}: “
+                  {q.supplierWords}”
                 </li>
               ))}
             </ul>
           </div>
         )}
         {requestId && (
-          <p className="mt-4 text-sm">
-            <Link className="underline underline-offset-4" to={`/r/${requestId}`}>
-              Open the practice order's quote book
-            </Link>
-          </p>
+          <ButtonLink to={`/r/${requestId}`} variant="ghost" className="mt-3" icon={ArrowRight}>
+            Open the practice quote book
+          </ButtonLink>
         )}
       </Card>
       <Card title="Transcript">
         {loading ? (
-          <p className="text-sm text-stone-500">
-            Waiting for Bolna's transcript (usually a few seconds)…
-          </p>
+          <p className="text-muted-fg">Waiting for Bolna's transcript, usually a few seconds…</p>
         ) : (
           <ol className="flex max-h-96 flex-col gap-2 overflow-y-auto text-sm">
             {lines.map((l) => (
-              <li
-                key={l.id}
-                className={l.bhaav ? 'text-stone-900 dark:text-stone-100' : 'text-stone-500'}
-              >
-                <span className="font-medium">{l.bhaav ? 'Bhaav' : 'You'}:</span> {l.text}
+              <li key={l.id} className={l.bhaav ? 'text-fg' : 'text-muted-fg'}>
+                <span className="font-semibold">{l.bhaav ? 'Bhaav' : 'You'}:</span> {l.text}
               </li>
             ))}
           </ol>

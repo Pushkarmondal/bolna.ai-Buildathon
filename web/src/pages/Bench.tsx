@@ -1,9 +1,9 @@
 // The test bench's latest results, bundled into the app by `npm run bench`.
 
 import type { BenchResults, BenchRun } from '@bhaav/shared';
-import { useState } from 'react';
 import data from '../bench-results.json';
-import { Card, Notice, PageTitle, Pill } from '../ui';
+import { CaretDown, Flask } from '../icons';
+import { Card, EmptyState, PageTitle, Pill, Stat } from '../ui';
 
 const results = data as BenchResults;
 
@@ -12,7 +12,6 @@ function pct(n: number, d: number) {
 }
 
 export function BenchPage() {
-  const [open, setOpen] = useState<string | null>(null);
   const runs = results.runs.filter((r) => !r.error);
   const failed = results.runs.length - runs.length;
   const unbacked = runs.reduce((n, r) => n + r.unbacked.length, 0);
@@ -24,27 +23,29 @@ export function BenchPage() {
   return (
     <>
       <PageTitle
-        title="Test bench"
-        sub="Simulated bargaining chats in text: an AI plays the supplier, and Bhaav answers through the same lie-catcher it uses on real calls."
+        eyebrow="Test bench"
+        title="Simulated bargaining chats"
+        sub="An AI plays the supplier in text, and Bhaav answers through the same lie-catcher it uses on real calls."
       />
       {results.runs.length === 0 ? (
-        <Notice>
-          No results yet. Run <code>npm run bench</code> with a Groq key, then rebuild the app.
-        </Notice>
+        <EmptyState icon={Flask} title="No results yet">
+          Run <code className="rounded bg-muted px-1.5 py-0.5">npm run bench</code> with a Groq key,
+          then rebuild the app.
+        </EmptyState>
       ) : (
         <>
           <div className="mb-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
             <Stat
               label="Unbacked numbers spoken"
               value={String(unbacked)}
-              good={unbacked === 0}
               note={`in ${runs.length} chats`}
+              tone={unbacked === 0 ? 'success' : undefined}
             />
             <Stat
               label="Saved quotes the supplier said"
               value={pct(backedSaves, saves.length)}
-              good={saves.length > 0 && backedSaves === saves.length}
               note={`${backedSaves} of ${saves.length}`}
+              tone={saves.length > 0 && backedSaves === saves.length ? 'success' : undefined}
             />
             <Stat
               label="Sentences stopped before speaking"
@@ -54,24 +55,19 @@ export function BenchPage() {
             <Stat
               label="Chats with more than one counter-offer"
               value={String(tooManyCounters)}
-              good={tooManyCounters === 0}
               note="the rule is one"
+              tone={tooManyCounters === 0 ? 'success' : undefined}
             />
           </div>
-          <p className="mb-4 text-sm text-stone-500">
+          <p className="mb-4 text-sm text-muted-fg">
             Run {results.generatedAt ? new Date(results.generatedAt).toLocaleString('en-IN') : ''}{' '}
             with {results.models.join(', ')}
             {failed > 0 ? `. ${failed} chats failed to run and are not counted.` : '.'}
           </p>
           <Card title="Chats">
-            <ul className="divide-y divide-stone-100 dark:divide-stone-800">
+            <ul className="divide-y divide-border">
               {results.runs.map((r) => (
-                <RunRow
-                  key={r.id}
-                  run={r}
-                  open={open === r.id}
-                  toggle={() => setOpen(open === r.id ? null : r.id)}
-                />
+                <RunRow key={r.id} run={r} />
               ))}
             </ul>
           </Card>
@@ -81,71 +77,48 @@ export function BenchPage() {
   );
 }
 
-function Stat({
-  label,
-  value,
-  note,
-  good,
-}: {
-  label: string;
-  value: string;
-  note?: string;
-  good?: boolean;
-}) {
+function RunRow({ run }: { run: BenchRun }) {
   return (
-    <Card>
-      <div className="text-sm text-stone-500">{label}</div>
-      <div
-        className={`mt-1 text-2xl font-semibold ${good === true ? 'text-emerald-700 dark:text-emerald-400' : ''}`}
-      >
-        {value}
-      </div>
-      {note && <div className="text-sm text-stone-500">{note}</div>}
-    </Card>
-  );
-}
-
-function RunRow({ run, open, toggle }: { run: BenchRun; open: boolean; toggle: () => void }) {
-  return (
-    <li className="py-2">
-      <button
-        type="button"
-        className="flex w-full flex-wrap items-center justify-between gap-2 text-left text-sm"
-        onClick={toggle}
-      >
-        <span>
-          <span className="font-medium">{run.persona}</span>{' '}
-          <span className="text-stone-500">· {run.style}</span>
-        </span>
-        <span className="flex flex-wrap gap-1.5">
-          {run.error ? (
-            <Pill tone="warn">Did not run</Pill>
-          ) : (
-            <>
-              <Pill tone={run.unbacked.length ? 'bad' : 'good'}>
-                {run.unbacked.length} unbacked
-              </Pill>
-              {run.blocked > 0 && <Pill tone="neutral">{run.blocked} stopped</Pill>}
-              <Pill>{run.saved.length} saved</Pill>
-            </>
-          )}
-        </span>
-      </button>
-      {open && (
-        <ol className="mt-2 flex flex-col gap-1 rounded-lg bg-stone-50 p-3 text-sm dark:bg-stone-900">
-          {run.error && <li className="text-red-700">{run.error}</li>}
+    <li>
+      <details className="group py-1">
+        <summary className="flex min-h-11 cursor-pointer list-none flex-wrap items-center justify-between gap-2 py-2">
+          <span className="flex items-center gap-2">
+            <CaretDown
+              size={16}
+              className="transition-transform group-open:rotate-180"
+              aria-hidden
+            />
+            <span className="font-medium">{run.persona}</span>
+            <span className="text-sm text-muted-fg">{run.style}</span>
+          </span>
+          <span className="flex flex-wrap gap-1.5">
+            {run.error ? (
+              <Pill tone="warn">Did not run</Pill>
+            ) : (
+              <>
+                <Pill tone={run.unbacked.length ? 'danger' : 'success'}>
+                  {run.unbacked.length} unbacked
+                </Pill>
+                {run.blocked > 0 && <Pill>{run.blocked} stopped</Pill>}
+                <Pill>{run.saved.length} saved</Pill>
+              </>
+            )}
+          </span>
+        </summary>
+        <ol className="mb-2 flex flex-col gap-1.5 rounded-xl bg-muted p-3 text-sm">
+          {run.error && <li className="text-danger">{run.error}</li>}
           {run.turns.map((t, i) => (
             // biome-ignore lint/suspicious/noArrayIndexKey: a transcript's turns never reorder
-            <li key={`${run.id}-${i}`} className={t.role === 'bhaav' ? '' : 'text-stone-500'}>
-              <span className="font-medium">{t.role === 'bhaav' ? 'Bhaav' : 'Supplier'}:</span>{' '}
+            <li key={`${run.id}-${i}`} className={t.role === 'bhaav' ? 'text-fg' : 'text-muted-fg'}>
+              <span className="font-semibold">{t.role === 'bhaav' ? 'Bhaav' : 'Supplier'}:</span>{' '}
               {t.text}
               {t.blocked && t.blocked.length > 0 && (
-                <span className="ml-1 text-red-600">(stopped: {t.blocked.join(', ')})</span>
+                <span className="text-danger"> (stopped: {t.blocked.join(', ')})</span>
               )}
             </li>
           ))}
         </ol>
-      )}
+      </details>
     </li>
   );
 }

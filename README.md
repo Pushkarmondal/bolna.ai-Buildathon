@@ -1,6 +1,6 @@
 # Bhaav
 
-A voice agent that phones suppliers for a small business, gets real quotes in Hindi, Hinglish or English, and bargains using only offers it truly has. A lie-catcher checks every number before Bolna speaks it.
+A voice agent that phones suppliers for a small business, gets real quotes in Hindi, Hinglish, Kannada or English, and bargains using only offers it truly has. A lie-catcher checks every number before Bolna speaks it.
 
 Built for the Bolna Buildathon (October 2026).
 
@@ -10,18 +10,23 @@ Built for the Bolna Buildathon (October 2026).
 2. The **Caller** agent phones each supplier, one at a time, asks the price, reads it back, and saves it to the quote book only after the supplier says yes.
 3. It calls the costlier suppliers back once with the best real offer.
 4. The buyer sees the ranked quotes, the rupees saved and the recordings, and approves one. Bhaav never agrees to a deal or places an order.
-5. **Be the supplier:** a judge takes the Caller's call in the browser and tries to make it say a price it can't prove.
+5. **Confirmation call (optional):** Bhaav phones the chosen supplier to say the buyer accepted their quote and will call to arrange payment. If the supplier changes the price on that call, the new terms are recorded and the results page warns the buyer.
+6. **WhatsApp summary:** the ranked quotes as plain text, to copy or open straight in WhatsApp.
+7. **Price memory:** every order's best delivered price per item, with a chart once there are four orders, and "last time" on each new result.
+8. **Be the supplier:** a judge takes the Caller's call in the browser and tries to make it say a price it can't prove.
+
+Each supplier is called in their own language: Hindi (written in Devanagari so the voice reads it right), Kannada (in Kannada script) or English, and Bhaav switches if they do.
 
 ## Stack
 
 | Layer | Choice |
 | --- | --- |
-| Frontend | TypeScript, React, Vite, React Router, TanStack Query, Tailwind CSS (`web/`) |
+| Frontend | TypeScript, React, Vite, React Router, TanStack Query, Tailwind CSS, Phosphor icons (`web/`) |
 | Backend | TypeScript, Hono on Cloudflare Workers, Zod (`worker/`) |
 | Database | Cloudflare D1 (SQLite), Drizzle ORM, SQL migrations from drizzle-kit |
 | Voice | Bolna: agents, phone calls, Web Call SDK; Sarvam Saaras (STT) and Bulbul v4 Flash (TTS) |
 | LLM | Groq (`gpt-oss-20b`, falling back to `gpt-oss-120b`, then `qwen3.8-27b`), only through the Worker |
-| Tests | Vitest inside the Workers runtime (`@cloudflare/vitest-plugin`); Biome for lint and format |
+| Tests | Vitest inside the Workers runtime (`@cloudflare/vitest-plugin`), Vitest for the web app's logic, Playwright in Chrome end to end; Biome for lint and format |
 
 ## How the lie-catcher works
 
@@ -35,14 +40,21 @@ worker/src/index.ts         Hono app: every route, plus the cron
 worker/src/llm.ts           custom LLM endpoint: model fallback + lie-catcher
 worker/src/numbers.ts       finds numbers in a sentence
 worker/src/engine.ts        landed price, best offer, round-2 list
-worker/src/dialler.ts       one call at a time, round 1 then round 2; limits; webhook handling
+worker/src/dialler.ts       one call at a time: round 1 asks, round 2 bargains, round 3 confirms; limits; webhooks
+worker/src/prices.ts        price memory: each past order's best price per item
 worker/src/tools.ts         Bolna custom functions: update_order, start_calls, save_quote, do_not_call
 worker/src/practice.ts      "Be the supplier" personas and practice orders
 worker/src/prompts.ts       the Desk and Caller prompts
-worker/src/agents.ts        the two Bolna agent configs
+worker/src/agents.ts        the Bolna agent configs: Desk, Caller, and the Caller as a graph agent
 worker/src/db/              Drizzle schema and the lie-catcher's database reads
 worker/migrations/          SQL migrations (quotes and events are append-only)
-web/src/                    React app: Home, Order (talk / live calls), Results, Be the supplier, Test bench
+web/src/                    React app: Home, Order (talk / live calls), Results, Price memory, Be the supplier, Test bench
+web/src/choice.ts           what became of the buyer's choice after the confirmation call
+web/src/summary.ts          the WhatsApp text
+web/src/chart.tsx           the price chart (SVG, no chart library)
+web/test/                   unit tests for the web app's logic
+e2e/                        Playwright tests: the whole buyer journey against the fake Bolna
+design-system/bhaav/        the design system (colours, type, rules) and where the code departs from it
 scripts/setup-agents.ts     registers the custom LLM and creates both Bolna agents
 scripts/fake-bolna.ts       a stand-in for Bolna's API, for running everything locally
 bench/run.ts                the test bench: simulated chats through the real lie-catcher
@@ -73,9 +85,10 @@ For frontend work with hot reload, also run `npm run dev:web` and open http://lo
 ## Checks
 
 ```bash
-npm test            # 86 tests inside the Workers runtime, with a local D1 and a faked Bolna
-npm run typecheck   # every package, plus scripts and bench
+npm test            # 100 Worker tests (Workers runtime, local D1, faked Bolna) + 27 web tests
+npm run typecheck   # every package, plus scripts, bench and e2e
 npm run lint
+npm run e2e         # builds, then runs the Playwright tests in your installed Chrome
 npm run bench -- --dry   # the bench harness, scripted, no network
 ```
 
@@ -98,7 +111,7 @@ npm run bench -- --dry   # the bench harness, scripted, no network
    ```bash
    WORKER_URL=https://bhaav.<you>.workers.dev BOLNA_API_KEY=… LLM_SECRET=… TOOL_SECRET=… WEBHOOK_SECRET=… npm run agents:setup
    ```
-   Put the two printed ids in `worker/wrangler.toml` (`BOLNA_DESK_AGENT_ID`, `BOLNA_CALLER_AGENT_ID`). If Bolna refuses the API body, `npm run agents:print` writes `bolna/*-agent.json` and `bolna/*-tools.json` to paste into the dashboard instead.
+   Put the two printed ids in `worker/wrangler.toml` (`BOLNA_DESK_AGENT_ID`, `BOLNA_CALLER_AGENT_ID`). Add `--graph` to create the Caller as a Bolna graph agent (greet, ask, read back, bargain, confirm, close) instead of a single prompt. If Bolna refuses the API body, `npm run agents:print` writes `bolna/*-agent.json` and `bolna/*-tools.json` to paste into the dashboard instead.
 6. **Set the limits** in `worker/wrangler.toml`: `SUPPLIER_ALLOWLIST` (the numbers of suppliers who agreed) and `MAX_CALLS_PER_DAY`. Then deploy again.
 7. **Test** in this order: a test call from each agent in Bolna's dashboard; Talk in the app; Be the supplier; then one real supplier who agreed.
 8. **Bench:** `GROQ_API_KEY=… npm run bench`, then `npm run build && npm run deploy -w worker` to publish the results on `/bench`.
@@ -120,6 +133,10 @@ npm run bench -- --dry   # the bench harness, scripted, no network
 | `SUPPLIER_ALLOWLIST` | var | Comma-separated numbers Bhaav may call; empty allows any |
 | `MAX_CALLS_PER_DAY` | var | Phone calls allowed in any 24 hours (default 60) |
 
+## Design
+
+The look was chosen with the [ui-ux-pro-max](https://github.com/nextlevelbuilder/ui-ux-pro-max-skill) design skill and written down in `design-system/bhaav/MASTER.md`; its last section lists where the code differs and why. In short: navy for structure, green only for the one main action and for savings, Outfit and Work Sans with Noto Devanagari and Kannada fallbacks, light and dark themes with every text pair at least 4.5:1, 44px touch targets, and a bottom bar on phones. Pages other than Home load on demand, and a page that fails to load after a deploy offers a reload instead of a blank screen.
+
 ## Safety rules built into the code
 
 - The lie-catcher checks every number before it is spoken, and every price before it is saved.
@@ -128,4 +145,5 @@ npm run bench -- --dry   # the bench harness, scripted, no network
 - One live phone call per order at a time, enforced by a unique index, so two dialler runs can't double-dial.
 - A supplier who says "don't call" is marked on every order, and that number can't be added again.
 - Practice calls are labelled practice, capped at 30 an hour, and stopped after 2 minutes in the browser.
+- The confirmation call is placed only after Approve, once per order, and never places the order itself.
 - A cron every minute recovers calls whose webhook never arrived.

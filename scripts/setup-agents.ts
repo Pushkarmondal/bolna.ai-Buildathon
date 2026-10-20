@@ -14,6 +14,9 @@ import { type AgentSetup, agentBody, dashboardTools } from '../worker/src/agents
 const BOLNA = 'https://api.bolna.ai';
 const LLM_MODEL = 'bhaav-llm';
 const dry = process.argv.includes('--dry');
+// --graph builds the Caller as a Bolna Graph Agent (steps and routing) instead of one prompt.
+const graph = process.argv.includes('--graph');
+const callerKind = graph ? 'caller-graph' : 'caller';
 
 function need(name: string): string {
   const value = process.env[name]?.trim();
@@ -36,18 +39,19 @@ const setup: AgentSetup = {
 
 if (dry) {
   mkdirSync('bolna', { recursive: true });
-  for (const kind of ['desk', 'caller'] as const) {
+  for (const kind of ['desk', 'caller', 'caller-graph'] as const) {
     writeFileSync(
       `bolna/${kind}-agent.json`,
       `${JSON.stringify(agentBody(kind, setup), null, 2)}\n`,
     );
+    if (kind === 'caller-graph') continue;
     writeFileSync(
       `bolna/${kind}-tools.json`,
       `${JSON.stringify(dashboardTools(kind, setup), null, 2)}\n`,
     );
   }
   console.log(
-    'Wrote bolna/desk-agent.json, bolna/caller-agent.json and the matching *-tools.json (secrets masked).',
+    'Wrote bolna/desk-agent.json, bolna/caller-agent.json, bolna/caller-graph-agent.json and the *-tools.json files (secrets masked).',
   );
   process.exit(0);
 }
@@ -85,7 +89,7 @@ else
   );
 
 // 2. Create or update each agent.
-for (const kind of ['desk', 'caller'] as const) {
+for (const kind of ['desk', callerKind] as const) {
   const existing = process.env[kind === 'desk' ? 'DESK_AGENT_ID' : 'CALLER_AGENT_ID']?.trim();
   const body = agentBody(kind, setup);
   const res = existing

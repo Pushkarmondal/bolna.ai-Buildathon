@@ -1,4 +1,4 @@
-import type { CallStatus, Unit } from '@bhaav/shared';
+import type { CallStatus, QuoteDto, Unit } from '@bhaav/shared';
 
 const inr = new Intl.NumberFormat('en-IN', { maximumFractionDigits: 2 });
 
@@ -77,3 +77,28 @@ const LIVE_STATUSES: CallStatus[] = [
   'call-disconnected',
 ];
 export const isLive = (status: CallStatus) => LIVE_STATUSES.includes(status);
+
+/** A quote's own terms in one line, e.g. "₹2,250 per 15 litre pack, ₹100 delivery, by Fri, 24 Oct". */
+export function quoteTerms(
+  q: Pick<
+    QuoteDto,
+    'price' | 'unit' | 'packSize' | 'packUnit' | 'deliveryCharge' | 'deliveryDate' | 'paymentTerms'
+  >,
+): string {
+  const per = q.packSize ? `${q.packSize} ${unitWord(q.packUnit)} pack` : unitWord(q.unit);
+  return [
+    `${rupees(q.price)} per ${per}`,
+    q.deliveryCharge ? `${rupees(q.deliveryCharge)} delivery` : '',
+    q.deliveryDate ? `by ${dateLabel(q.deliveryDate)}` : '',
+    q.paymentTerms ?? '',
+  ]
+    .filter(Boolean)
+    .join(', ');
+}
+
+/** "+919876543210" reads as "+91 98765 43210"; anything else is shown as stored. */
+export function phoneLabel(phone: string): string {
+  if (phone === 'web') return 'browser call';
+  const m = phone.match(/^\+91(\d{5})(\d{5})$/);
+  return m ? `+91 ${m[1]} ${m[2]}` : phone;
+}

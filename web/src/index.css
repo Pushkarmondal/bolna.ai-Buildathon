@@ -1,5 +1,134 @@
 @import "tailwindcss";
 
+/*
+ * Bhaav's design tokens (design-system/bhaav/MASTER.md, adjusted in its "Bhaav adjustments" section).
+ * Swiss-style minimalism: navy for structure, green only for the one main action and for savings.
+ * Every text pair is at least 4.5:1 in both themes (checked by script, not by eye).
+ */
+@theme inline {
+  --font-sans:
+    "Work Sans", "Noto Sans Devanagari", "Noto Sans Kannada", ui-sans-serif, system-ui, sans-serif;
+  --font-display:
+    "Outfit", "Noto Sans Devanagari", "Noto Sans Kannada", ui-sans-serif, system-ui, sans-serif;
+
+  --color-bg: var(--bg);
+  --color-fg: var(--fg);
+  --color-card: var(--card);
+  --color-muted: var(--muted);
+  --color-muted-fg: var(--muted-fg);
+  --color-border: var(--border);
+  --color-input: var(--input-border);
+  --color-primary: var(--primary);
+  --color-on-primary: var(--on-primary);
+  --color-accent: var(--accent);
+  --color-on-accent: var(--on-accent);
+  --color-link: var(--link);
+  --color-ring: var(--ring);
+  --color-success: var(--success-fg);
+  --color-success-soft: var(--success-bg);
+  --color-warn: var(--warn-fg);
+  --color-warn-soft: var(--warn-bg);
+  --color-danger: var(--danger-fg);
+  --color-danger-soft: var(--danger-bg);
+  --color-info: var(--info-fg);
+  --color-info-soft: var(--info-bg);
+}
+
 :root {
-  color-scheme: light dark;
+  color-scheme: light;
+  --bg: #f8fafc;
+  --fg: #0f172a;
+  --card: #ffffff;
+  --muted: #f1f5f9;
+  --muted-fg: #475569;
+  --border: #e2e8f0;
+  --input-border: #64748b;
+  --primary: #1e3a5f;
+  --on-primary: #ffffff;
+  --accent: #047857;
+  --on-accent: #ffffff;
+  --link: #1d4ed8;
+  --ring: #2563eb;
+  --success-fg: #065f46;
+  --success-bg: #d1fae5;
+  --warn-fg: #92400e;
+  --warn-bg: #fef3c7;
+  --danger-fg: #991b1b;
+  --danger-bg: #fee2e2;
+  --info-fg: #1e40af;
+  --info-bg: #dbeafe;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --bg: #0b1220;
+    --fg: #e2e8f0;
+    --card: #111a2b;
+    --muted: #1a2438;
+    --muted-fg: #a3b1c6;
+    --border: #243049;
+    --input-border: #7c8ba1;
+    --primary: #9db9de;
+    --on-primary: #0b1626;
+    --accent: #34d399;
+    --on-accent: #052e1c;
+    --link: #93c5fd;
+    --ring: #93c5fd;
+    --success-fg: #a7f3d0;
+    --success-bg: #064e3b;
+    --warn-fg: #fde68a;
+    --warn-bg: #78350f;
+    --danger-fg: #fecaca;
+    --danger-bg: #7f1d1d;
+    --info-fg: #bfdbfe;
+    --info-bg: #1e3a8a;
+  }
+}
+
+html {
+  font-family: var(--font-sans);
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  background: var(--bg);
+  color: var(--fg);
+  line-height: 1.5;
+}
+
+h1,
+h2,
+h3 {
+  font-family: var(--font-display);
+  text-wrap: balance;
+}
+
+/* Prices and timers don't jump as digits change. */
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+:focus-visible {
+  outline: 3px solid var(--ring);
+  outline-offset: 2px;
+}
+
+a,
+button,
+select,
+summary,
+input[type="checkbox"] {
+  touch-action: manipulation;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }

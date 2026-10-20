@@ -23,6 +23,7 @@ import {
   advance,
   applyExecution,
   callerUserData,
+  confirmChoice,
   diallerEnv,
   failOrphanedCalls,
   parseAllowlist,
@@ -39,6 +40,7 @@ import {
   personaCards,
   practiceCallsLastHour,
 } from './practice';
+import { priceSeries } from './prices';
 import { doNotCall, type Params, saveQuote, startOrder, updateOrder } from './tools';
 
 type Env = { Bindings: Cloudflare.Env };
@@ -250,6 +252,18 @@ api.post('/requests/:id/approve', json(z.object({ quoteId: z.string() })), async
     .values({ id: newId('evt'), requestId: id, type: 'approved', detail: { quoteId } });
   return c.json(await orderView(db, id));
 });
+
+// Round 3, only when the buyer presses it: Bhaav tells the chosen supplier.
+api.post('/requests/:id/confirm', async (c) => {
+  const db = dbOf(c);
+  const id = c.req.param('id');
+  const result = await confirmChoice(diallerEnv(c.env), db, id);
+  if (!result.ok) return c.json({ error: result.message }, 409);
+  return c.json({ message: result.message, view: await orderView(db, id) });
+});
+
+// Price memory: each item's best price per past order.
+api.get('/prices', async (c) => c.json(await priceSeries(dbOf(c))));
 
 api.post(
   '/web-session',

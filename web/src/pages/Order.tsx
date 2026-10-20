@@ -4,10 +4,46 @@
 import type { LANGUAGES, OrderView, SupplierDto, Unit } from '@bhaav/shared';
 import { useQueryClient } from '@tanstack/react-query';
 import { type FormEvent, useEffect, useRef, useState } from 'react';
-import { Link, useParams } from 'react-router';
+import { useParams } from 'react-router';
 import { api, lastOrder, useOrder } from '../api';
-import { callLabel, dateLabel, isLive, ORDER_UNITS, rupees, timeLabel, unitWord } from '../format';
-import { Button, Card, Field, inputClass, Notice, PageTitle, Pill, VoiceMeter } from '../ui';
+import {
+  callLabel,
+  dateLabel,
+  isLive,
+  ORDER_UNITS,
+  phoneLabel,
+  rupees,
+  timeLabel,
+  unitWord,
+} from '../format';
+import {
+  ArrowRight,
+  ListChecks,
+  Microphone,
+  PhoneCall,
+  PhoneDisconnect,
+  Receipt,
+  ShieldCheck,
+  Trash,
+  UserPlus,
+  UsersThree,
+  WarningCircle,
+} from '../icons';
+import {
+  Button,
+  ButtonLink,
+  Card,
+  EmptyState,
+  Field,
+  fieldProps,
+  inputClass,
+  Notice,
+  PageTitle,
+  Pill,
+  Steps,
+  type Tone,
+  VoiceMeter,
+} from '../ui';
 import { useWebCall } from '../webcall';
 
 type WebCall = ReturnType<typeof useWebCall>;
@@ -23,9 +59,11 @@ export function OrderPage() {
     if (id) lastOrder.set(id);
   }, [id]);
 
-  if (order.isPending) return <p className="text-stone-500">Loading the order…</p>;
+  if (order.isPending) return <p className="text-muted-fg">Loading the order…</p>;
   if (order.error || !order.data) {
-    return <Notice tone="bad">{order.error?.message ?? 'This order could not be loaded.'}</Notice>;
+    return (
+      <Notice tone="danger">{order.error?.message ?? 'This order could not be loaded.'}</Notice>
+    );
   }
   const view = order.data;
   return view.order.status === 'draft' ? (
@@ -42,17 +80,33 @@ function useSetView(id: string) {
   return (view: OrderView) => queryClient.setQueryData(['order', id], view);
 }
 
+const LANGUAGE_LABELS: Record<(typeof LANGUAGES)[number], string> = {
+  hi: 'Hindi or Hinglish',
+  kn: 'Kannada',
+  en: 'English',
+};
+
 function DraftOrder({ view, desk }: { view: OrderView; desk: WebCall }) {
+  const o = view.order;
+  const orderReady = Boolean(o.item && o.quantity != null && o.unit && o.deliverBy);
+  const suppliersReady = view.suppliers.some((s) => !s.doNotCall);
   return (
     <>
       <PageTitle
-        title={`Order for ${view.order.buyerName ?? 'you'}`}
+        eyebrow="New order"
+        title={`Order for ${o.buyerName ?? 'you'}`}
         sub="Tell Bhaav what you need, or type it. Then add the suppliers Bhaav should call."
-        aside={<Pill>Draft</Pill>}
       />
-      <div className="grid gap-4 lg:grid-cols-2">
+      <Steps
+        steps={[
+          { label: 'What you need', done: orderReady },
+          { label: 'Who to call', done: suppliersReady },
+          { label: 'Start calling', done: false },
+        ]}
+      />
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <div className="flex min-w-0 flex-col gap-4">
-          <TalkCard requestId={view.order.id} call={desk} />
+          <TalkCard requestId={o.id} call={desk} />
           <OrderCard view={view} />
         </div>
         <div className="flex min-w-0 flex-col gap-4">
@@ -75,21 +129,24 @@ function TalkCard({ requestId, call }: { requestId: string; call: WebCall }) {
   return (
     <Card
       title="Talk to Bhaav"
+      icon={Microphone}
       aside={
         call.state === 'active' ? (
-          <Pill tone="live" pulse>
+          <Pill tone="info" pulse>
             Listening
           </Pill>
         ) : null
       }
     >
-      <p className="mb-3 text-sm text-stone-600 dark:text-stone-400">
-        Say it in Hindi, Hinglish or English: "50 kilo pyaaz chahiye, Friday tak, Indiranagar." The
-        order card fills in as you speak.
+      <p className="mb-4 text-muted-fg">
+        Say it in Hindi, Kannada or English, for example "50 kilo pyaaz chahiye, Friday tak,
+        Indiranagar". The order card fills in as you speak.
       </p>
       <div className="flex flex-col gap-3">
         <Button
           variant={call.active ? 'danger' : 'primary'}
+          size="lg"
+          icon={call.active ? PhoneDisconnect : Microphone}
           busy={call.state === 'connecting' || call.state === 'ringing'}
           onClick={() =>
             call.state === 'active' ? call.stop() : call.start({ kind: 'desk', requestId })
@@ -98,7 +155,7 @@ function TalkCard({ requestId, call }: { requestId: string; call: WebCall }) {
           {label}
         </Button>
         {call.state === 'active' && <VoiceMeter level={call.volume} />}
-        {call.error && <Notice tone="bad">{call.error}</Notice>}
+        {call.error && <Notice tone="danger">{call.error}</Notice>}
       </div>
     </Card>
   );
@@ -132,6 +189,7 @@ function useLiveField(server: string, save: (value: string) => void) {
 function OrderCard({ view }: { view: OrderView }) {
   const setView = useSetView(view.order.id);
   const [error, setError] = useState<string | null>(null);
+  const [quantityError, setQuantityError] = useState<string | null>(null);
   const o = view.order;
 
   const patch = (body: Record<string, unknown>) => {
@@ -144,9 +202,13 @@ function OrderCard({ view }: { view: OrderView }) {
   const item = useLiveField(o.item ?? '', (v) => patch({ item: v.trim() || null }));
   const quantity = useLiveField(o.quantity == null ? '' : String(o.quantity), (v) => {
     const n = Number(v);
-    if (v.trim() === '') patch({ quantity: null });
-    else if (Number.isFinite(n) && n > 0) patch({ quantity: n });
-    else setError('Quantity must be a number above zero.');
+    if (v.trim() === '') {
+      setQuantityError(null);
+      patch({ quantity: null });
+    } else if (Number.isFinite(n) && n > 0) {
+      setQuantityError(null);
+      patch({ quantity: n });
+    } else setQuantityError('Use a number above zero, like 50.');
   });
   const quality = useLiveField(o.quality ?? '', (v) => patch({ quality: v.trim() || null }));
   const area = useLiveField(o.area ?? '', (v) => patch({ area: v.trim() || null }));
@@ -154,35 +216,43 @@ function OrderCard({ view }: { view: OrderView }) {
   return (
     <Card
       title="Order card"
-      aside={view.missing.length === 0 ? <Pill tone="good">Ready</Pill> : null}
+      icon={Receipt}
+      aside={
+        view.missing.some((m) => m !== 'at least one supplier') ? null : (
+          <Pill tone="success">Complete</Pill>
+        )
+      }
     >
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <div className="sm:col-span-2">
-          <Field label="What to buy">
+          <Field id="item" label="What to buy">
             <input
               className={inputClass}
-              placeholder="red onions"
+              placeholder="e.g. red onions"
               value={item.value}
               onFocus={item.onFocus}
               onBlur={item.onBlur}
               onChange={(e) => item.onChange(e.target.value)}
+              {...fieldProps('item', {})}
             />
           </Field>
         </div>
-        <Field label="How much">
+        <Field id="quantity" label="How much" error={quantityError}>
           <input
-            className={inputClass}
+            className={`${inputClass} tabular`}
             inputMode="decimal"
-            placeholder="50"
+            placeholder="e.g. 50"
             value={quantity.value}
             onFocus={quantity.onFocus}
             onBlur={quantity.onBlur}
             onChange={(e) => quantity.onChange(e.target.value)}
+            {...fieldProps('quantity', { error: quantityError })}
           />
         </Field>
-        <Field label="Unit">
+        <Field id="unit" label="Unit">
           <select
             className={inputClass}
+            id="unit"
             value={o.unit ?? ''}
             onChange={(e) => patch({ unit: e.target.value || null })}
           >
@@ -194,39 +264,42 @@ function OrderCard({ view }: { view: OrderView }) {
             ))}
           </select>
         </Field>
-        <Field label="Deliver by">
+        <Field id="deliver-by" label="Deliver by">
           <input
             className={inputClass}
             type="date"
+            id="deliver-by"
             value={o.deliverBy ?? ''}
             onChange={(e) => patch({ deliverBy: e.target.value || null })}
           />
         </Field>
-        <Field label="Area" hint="Optional">
+        <Field id="area" label="Area" hint="Optional">
           <input
             className={inputClass}
-            placeholder="Indiranagar"
+            placeholder="e.g. Indiranagar"
             value={area.value}
             onFocus={area.onFocus}
             onBlur={area.onBlur}
             onChange={(e) => area.onChange(e.target.value)}
+            {...fieldProps('area', { hint: true })}
           />
         </Field>
         <div className="sm:col-span-2">
-          <Field label="Quality" hint="Optional, e.g. 'medium size, Nashik'">
+          <Field id="quality" label="Quality" hint="Optional, for example 'medium size, Nashik'">
             <input
               className={inputClass}
               value={quality.value}
               onFocus={quality.onFocus}
               onBlur={quality.onBlur}
               onChange={(e) => quality.onChange(e.target.value)}
+              {...fieldProps('quality', { hint: true })}
             />
           </Field>
         </div>
       </div>
       {error && (
-        <div className="mt-3">
-          <Notice tone="bad">{error}</Notice>
+        <div className="mt-4">
+          <Notice tone="danger">{error}</Notice>
         </div>
       )}
     </Card>
@@ -239,38 +312,40 @@ function SuppliersCard({ view }: { view: OrderView }) {
   const [phone, setPhone] = useState('');
   const [language, setLanguage] = useState<(typeof LANGUAGES)[number]>('hi');
   const [agreed, setAgreed] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [errors, setErrors] = useState<{
+    name?: string;
+    phone?: string;
+    agreed?: string;
+    form?: string;
+  }>({});
   const [busy, setBusy] = useState(false);
 
   async function add(e: FormEvent) {
     e.preventDefault();
-    const problems: string[] = [];
-    if (!name.trim()) problems.push('a name');
-    if (!phone.trim()) problems.push('a phone number');
-    if (!agreed) problems.push("a tick to confirm they agreed to take Bhaav's call");
-    if (problems.length) {
-      setError(`Add ${problems.join(', ')}.`);
-      return;
-    }
+    const next: typeof errors = {};
+    if (!name.trim()) next.name = 'Add the supplier’s name.';
+    if (!phone.trim()) next.phone = 'Add a 10-digit mobile number.';
+    if (!agreed) next.agreed = 'Bhaav only calls suppliers who agreed to take its call.';
+    setErrors(next);
+    if (Object.keys(next).length > 0) return;
     setBusy(true);
-    setError(null);
     try {
-      const next = await api<OrderView>(`/api/requests/${view.order.id}/suppliers`, {
+      const updated = await api<OrderView>(`/api/requests/${view.order.id}/suppliers`, {
         json: { name, phone, language, consentNote: "Agreed to take Bhaav's call" },
       });
-      setView(next);
+      setView(updated);
       setName('');
       setPhone('');
       setAgreed(false);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not add the supplier.');
+      const message = err instanceof Error ? err.message : 'Could not add the supplier.';
+      setErrors(/number|mobile|list/i.test(message) ? { phone: message } : { form: message });
     } finally {
       setBusy(false);
     }
   }
 
   async function remove(supplier: SupplierDto) {
-    setError(null);
     try {
       setView(
         await api<OrderView>(`/api/requests/${view.order.id}/suppliers/${supplier.id}`, {
@@ -278,74 +353,111 @@ function SuppliersCard({ view }: { view: OrderView }) {
         }),
       );
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not remove the supplier.');
+      setErrors({ form: err instanceof Error ? err.message : 'Could not remove the supplier.' });
     }
   }
 
   return (
     <Card
-      title="Suppliers to call"
-      aside={<span className="text-sm text-stone-500">{view.suppliers.length} added</span>}
+      title="Who to call"
+      icon={UsersThree}
+      aside={<span className="tabular text-sm text-muted-fg">{view.suppliers.length} added</span>}
     >
-      {view.suppliers.length > 0 && (
-        <ul className="mb-4 divide-y divide-stone-100 dark:divide-stone-800">
+      {view.suppliers.length > 0 ? (
+        <ul className="mb-5 divide-y divide-border">
           {view.suppliers.map((s) => (
-            <li key={s.id} className="flex items-center justify-between gap-3 py-2 text-sm">
+            <li key={s.id} className="flex items-center justify-between gap-3 py-2.5">
               <div className="min-w-0">
-                <div className="truncate font-medium">{s.name}</div>
-                <div className="text-stone-500">
-                  {s.phone} · {s.language === 'en' ? 'English' : 'Hindi'}
+                <p className="truncate font-medium">{s.name}</p>
+                <p className="tabular text-sm text-muted-fg">
+                  {phoneLabel(s.phone)} ·{' '}
+                  {LANGUAGE_LABELS[s.language as keyof typeof LANGUAGE_LABELS] ?? s.language}
                   {s.doNotCall && ' · asked not to be called'}
-                </div>
+                </p>
               </div>
-              <Button variant="secondary" onClick={() => remove(s)}>
-                Remove
+              <Button
+                variant="ghost"
+                icon={Trash}
+                onClick={() => remove(s)}
+                aria-label={`Remove ${s.name}`}
+              >
+                <span className="hidden sm:inline">Remove</span>
               </Button>
             </li>
           ))}
         </ul>
+      ) : (
+        <p className="mb-4 text-muted-fg">
+          Add the suppliers you already buy from. Bhaav calls them one at a time.
+        </p>
       )}
-      <form onSubmit={add} className="flex flex-col gap-3">
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          <Field label="Name">
+      <form onSubmit={add} className="flex flex-col gap-4" noValidate>
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <Field id="supplier-name" label="Name" error={errors.name}>
             <input
               className={inputClass}
-              placeholder="Gupta Traders"
+              placeholder="e.g. Gupta Traders"
               value={name}
               onChange={(e) => setName(e.target.value)}
+              {...fieldProps('supplier-name', { error: errors.name })}
             />
           </Field>
-          <Field label="Mobile number">
+          <Field id="supplier-phone" label="Mobile number" error={errors.phone}>
             <input
-              className={inputClass}
+              className={`${inputClass} tabular`}
+              type="tel"
               inputMode="tel"
-              placeholder="98765 43210"
+              autoComplete="off"
+              placeholder="e.g. 98765 43210"
               value={phone}
               onChange={(e) => setPhone(e.target.value)}
+              {...fieldProps('supplier-phone', { error: errors.phone })}
             />
           </Field>
         </div>
-        <Field label="Speaks">
+        <Field id="supplier-language" label="Speaks">
           <select
             className={inputClass}
+            id="supplier-language"
             value={language}
-            onChange={(e) => setLanguage(e.target.value as 'hi' | 'en')}
+            onChange={(e) => setLanguage(e.target.value as (typeof LANGUAGES)[number])}
           >
-            <option value="hi">Hindi or Hinglish</option>
-            <option value="en">English</option>
+            {(Object.keys(LANGUAGE_LABELS) as Array<(typeof LANGUAGES)[number]>).map((code) => (
+              <option key={code} value={code}>
+                {LANGUAGE_LABELS[code]}
+              </option>
+            ))}
           </select>
         </Field>
-        <label className="flex items-start gap-2 text-sm">
-          <input
-            type="checkbox"
-            className="mt-0.5"
-            checked={agreed}
-            onChange={(e) => setAgreed(e.target.checked)}
-          />
-          <span>This supplier agreed to take a call from Bhaav, an AI assistant.</span>
-        </label>
-        {error && <Notice tone="bad">{error}</Notice>}
-        <Button type="submit" variant="secondary" busy={busy}>
+        <div>
+          <label
+            className="flex min-h-11 cursor-pointer items-start gap-3 text-sm"
+            htmlFor="supplier-agreed"
+          >
+            <input
+              id="supplier-agreed"
+              type="checkbox"
+              className="mt-0.5 size-5 shrink-0 accent-[var(--accent)]"
+              checked={agreed}
+              onChange={(e) => setAgreed(e.target.checked)}
+              aria-describedby={errors.agreed ? 'supplier-agreed-error' : undefined}
+              aria-invalid={errors.agreed ? true : undefined}
+            />
+            <span>This supplier agreed to take a call from Bhaav, an AI assistant.</span>
+          </label>
+          {errors.agreed && (
+            <p
+              id="supplier-agreed-error"
+              className="mt-1 flex items-start gap-1.5 text-sm text-danger"
+              role="alert"
+            >
+              <WarningCircle size={18} weight="bold" className="mt-0.5 shrink-0" aria-hidden />
+              {errors.agreed}
+            </p>
+          )}
+        </div>
+        {errors.form && <Notice tone="danger">{errors.form}</Notice>}
+        <Button type="submit" variant="secondary" busy={busy} icon={UserPlus}>
           Add supplier
         </Button>
       </form>
@@ -378,22 +490,29 @@ function StartCard({ view }: { view: OrderView }) {
   }
 
   return (
-    <Card title="Start calling">
-      <p className="mb-3 text-sm text-stone-600 dark:text-stone-400">
+    <Card title="Start calling" icon={PhoneCall}>
+      <p className="mb-4 text-muted-fg">
         Bhaav calls one supplier at a time, then calls the costlier ones back with the best real
         offer. It never agrees to a deal: you choose at the end.
       </p>
       {view.missing.length > 0 && (
-        <p className="mb-3 text-sm text-stone-600 dark:text-stone-400">
-          Still needed: {view.missing.join(', ')}.
+        <p className="mb-4 text-sm text-muted-fg">
+          <span className="font-medium text-fg">Still needed:</span> {view.missing.join(', ')}.
         </p>
       )}
       {error && error.missing === missingNow && (
-        <div className="mb-3">
-          <Notice tone="bad">{error.text}</Notice>
+        <div className="mb-4">
+          <Notice tone="danger">{error.text}</Notice>
         </div>
       )}
-      <Button onClick={start} busy={busy} className="w-full">
+      <Button
+        onClick={start}
+        busy={busy}
+        variant="cta"
+        size="lg"
+        className="w-full"
+        icon={PhoneCall}
+      >
         Start calling
       </Button>
     </Card>
@@ -402,96 +521,110 @@ function StartCard({ view }: { view: OrderView }) {
 
 // ---- Live: calls, quote book, lie-catcher ----------------------------------------------------
 
-const STAGE: Record<string, { label: string; tone: 'live' | 'good' | 'neutral' }> = {
-  calling: { label: 'Round 1: asking prices', tone: 'live' },
-  bargaining: { label: 'Round 2: bargaining', tone: 'live' },
-  done: { label: 'All calls done', tone: 'good' },
-  approved: { label: 'Approved', tone: 'good' },
+const STAGE: Record<string, { label: string; tone: Tone }> = {
+  calling: { label: 'Round 1: asking prices', tone: 'info' },
+  bargaining: { label: 'Round 2: bargaining', tone: 'info' },
+  done: { label: 'All calls done', tone: 'success' },
+  approved: { label: 'Supplier chosen', tone: 'success' },
 };
+
+const ROUND_NAMES: Record<number, string> = { 1: 'Ask', 2: 'Bargain', 3: 'Confirm' };
 
 function LiveCalls({ view, desk }: { view: OrderView; desk: WebCall }) {
   const o = view.order;
   const stage = STAGE[o.status] ?? { label: o.status, tone: 'neutral' as const };
   const working = o.status === 'calling' || o.status === 'bargaining';
   const supplierName = (id: string) => view.suppliers.find((s) => s.id === id)?.name ?? 'Supplier';
+  const liveCall = view.calls.find((c) => isLive(c.status));
+  const quoted = new Set(view.quotes.map((q) => q.supplierId)).size;
+  const callable = view.suppliers.filter(
+    (s) => s.phone !== 'web' || view.calls.some((c) => c.supplierId === s.id),
+  );
+  // One status sentence for screen readers, instead of every badge announcing itself.
+  const status = liveCall
+    ? `${callLabel(liveCall.status)}: ${supplierName(liveCall.supplierId)}, round ${liveCall.round}. ${quoted} of ${callable.length} suppliers have quoted.`
+    : `${stage.label}. ${quoted} of ${callable.length} suppliers have quoted.`;
 
   return (
     <>
       <PageTitle
+        eyebrow={`For ${o.buyerName ?? 'you'}${o.isPractice ? ' · practice' : ''}`}
         title={`${o.quantity ?? ''} ${unitWord(o.unit)} ${o.item ?? ''}`.trim()}
-        sub={`For ${o.buyerName ?? 'you'} · deliver by ${dateLabel(o.deliverBy)}${o.area ? ` · ${o.area}` : ''}${o.isPractice ? ' · practice' : ''}`}
+        sub={`Deliver by ${dateLabel(o.deliverBy)}${o.area ? ` · ${o.area}` : ''}`}
         aside={
           <Pill tone={stage.tone} pulse={working}>
             {stage.label}
           </Pill>
         }
       />
+      <p className="sr-only" role="status" aria-atomic="true">
+        {status}
+      </p>
+
       {desk.active && (
-        <div className="mb-4 flex flex-wrap items-center gap-3 rounded-lg border border-stone-200 bg-white px-3 py-2 text-sm dark:border-stone-800 dark:bg-stone-900">
-          <Pill tone="live" pulse>
+        <div className="mb-4 flex flex-wrap items-center gap-3 rounded-xl border border-border bg-card px-4 py-3">
+          <Pill tone="info" pulse>
             Still talking to Bhaav
           </Pill>
           <div className="min-w-24 flex-1">
             <VoiceMeter level={desk.volume} />
           </div>
-          <Button variant="secondary" onClick={desk.stop}>
+          <Button variant="secondary" icon={PhoneDisconnect} onClick={desk.stop}>
             End conversation
           </Button>
         </div>
       )}
+
       {!working && (
-        <div className="mb-4">
-          <Notice tone="good">
-            {o.status === 'approved' ? 'You have chosen a supplier.' : 'Every call is finished.'}{' '}
-            <Link className="font-medium underline underline-offset-4" to={`/r/${o.id}/result`}>
-              {o.status === 'approved'
-                ? 'See the results'
-                : 'See the results and choose a supplier'}
-            </Link>
-            .
-          </Notice>
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-success/30 bg-success-soft px-4 py-3 text-success">
+          <p className="font-medium">
+            {o.status === 'approved' ? 'You have chosen a supplier.' : 'Every call is finished.'}
+          </p>
+          <ButtonLink to={`/r/${o.id}/result`} variant="cta" icon={ArrowRight}>
+            {o.status === 'approved' ? 'See the results' : 'See results and choose'}
+          </ButtonLink>
         </div>
       )}
-      <div className="grid gap-4 lg:grid-cols-[3fr_2fr]">
+
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
         <div className="flex min-w-0 flex-col gap-4">
-          <Card title="Calls">
-            <ul className="divide-y divide-stone-100 dark:divide-stone-800">
-              {view.suppliers
-                .filter((s) => s.phone !== 'web' || view.calls.some((c) => c.supplierId === s.id))
-                .map((s) => {
-                  const own = view.calls.filter((c) => c.supplierId === s.id);
-                  const latest = [...view.quotes].reverse().find((q) => q.supplierId === s.id);
-                  return (
-                    <li
-                      key={s.id}
-                      className="flex flex-wrap items-center justify-between gap-3 py-3 text-sm"
-                    >
-                      <div className="min-w-0">
-                        <div className="font-medium">{s.name}</div>
-                        <div className="text-stone-500">
-                          {latest
-                            ? `${rupees(latest.price)} per ${unitWord(latest.unit)}${latest.packSize ? ` (${latest.packSize} ${unitWord(latest.packUnit)})` : ''}`
-                            : 'No quote yet'}
-                        </div>
-                      </div>
-                      <div className="flex flex-wrap gap-1.5">
-                        {own.length === 0 && <Pill>Not called yet</Pill>}
-                        {own.map((c) => (
-                          <Pill
-                            key={c.id}
-                            tone={
-                              isLive(c.status) ? 'live' : c.status === 'completed' ? 'good' : 'warn'
-                            }
-                            pulse={isLive(c.status)}
-                          >
-                            Round {c.round}: {callLabel(c.status)}
-                          </Pill>
-                        ))}
-                        {s.doNotCall && <Pill tone="bad">Asked not to be called</Pill>}
-                      </div>
-                    </li>
-                  );
-                })}
+          <Card title="Calls" icon={PhoneCall}>
+            <ul className="divide-y divide-border">
+              {callable.map((s) => {
+                const own = view.calls.filter((c) => c.supplierId === s.id);
+                const latest = [...view.quotes].reverse().find((q) => q.supplierId === s.id);
+                return (
+                  <li key={s.id} className="flex flex-wrap items-center justify-between gap-3 py-3">
+                    <div className="min-w-0">
+                      <p className="font-medium">{s.name}</p>
+                      <p className="tabular text-sm text-muted-fg">
+                        {latest
+                          ? `${rupees(latest.price)} per ${latest.packSize ? `${latest.packSize} ${unitWord(latest.packUnit)} pack` : unitWord(latest.unit)}`
+                          : 'No quote yet'}
+                      </p>
+                    </div>
+                    <div className="flex flex-wrap gap-1.5">
+                      {own.length === 0 && <Pill>Not called yet</Pill>}
+                      {own.map((c) => (
+                        <Pill
+                          key={c.id}
+                          tone={
+                            isLive(c.status)
+                              ? 'info'
+                              : c.status === 'completed'
+                                ? 'success'
+                                : 'warn'
+                          }
+                          pulse={isLive(c.status)}
+                        >
+                          {ROUND_NAMES[c.round] ?? `Round ${c.round}`}: {callLabel(c.status)}
+                        </Pill>
+                      ))}
+                      {s.doNotCall && <Pill tone="danger">Asked not to be called</Pill>}
+                    </div>
+                  </li>
+                );
+              })}
             </ul>
           </Card>
           <QuoteBook view={view} supplierName={supplierName} />
@@ -512,47 +645,62 @@ function QuoteBook({
   return (
     <Card
       title="Quote book"
-      aside={<span className="text-xs text-stone-500">Written once, never edited</span>}
+      icon={ListChecks}
+      aside={<span className="text-sm text-muted-fg">Written once, never edited</span>}
     >
       {view.quotes.length === 0 ? (
-        <p className="text-sm text-stone-500">
-          Quotes appear here the moment a supplier confirms one.
-        </p>
+        <EmptyState icon={ListChecks} title="No quotes yet">
+          A quote appears here the moment a supplier confirms it.
+        </EmptyState>
       ) : (
-        <div className="-mx-4 overflow-x-auto px-4">
-          <table className="w-full min-w-[32rem] text-left text-sm">
-            <thead className="text-xs text-stone-500">
-              <tr>
-                <th className="py-1 pr-3 font-medium">Time</th>
-                <th className="py-1 pr-3 font-medium">Supplier</th>
-                <th className="py-1 pr-3 font-medium">Quote</th>
-                <th className="py-1 pr-3 font-medium">
+        <section
+          className="-mx-4 overflow-x-auto px-4 sm:-mx-5 sm:px-5"
+          aria-label="Quote book table"
+          // biome-ignore lint/a11y/noNoninteractiveTabindex: on a phone the table scrolls sideways, and a keyboard can only scroll what takes focus
+          tabIndex={0}
+        >
+          <table className="w-full min-w-[34rem] text-left text-sm">
+            <caption className="sr-only">Every quote suppliers confirmed, oldest first</caption>
+            <thead className="text-muted-fg">
+              <tr className="border-b border-border">
+                <th scope="col" className="py-2 pr-3 font-medium">
+                  Time
+                </th>
+                <th scope="col" className="py-2 pr-3 font-medium">
+                  Supplier
+                </th>
+                <th scope="col" className="py-2 pr-3 font-medium">
+                  Quote
+                </th>
+                <th scope="col" className="py-2 pr-3 font-medium">
                   Per {unitWord(view.order.unit)}, delivered
                 </th>
-                <th className="py-1 font-medium">Their words</th>
+                <th scope="col" className="py-2 font-medium">
+                  Their words
+                </th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-stone-100 dark:divide-stone-800">
+            <tbody className="divide-y divide-border">
               {view.quotes.map((q) => (
                 <tr key={q.id}>
-                  <td className="py-2 pr-3 whitespace-nowrap text-stone-500">
+                  <td className="tabular whitespace-nowrap py-2.5 pr-3 text-muted-fg">
                     {timeLabel(q.createdAt)}
                   </td>
-                  <td className="py-2 pr-3">{supplierName(q.supplierId)}</td>
-                  <td className="py-2 pr-3 whitespace-nowrap">
+                  <td className="py-2.5 pr-3">{supplierName(q.supplierId)}</td>
+                  <td className="tabular whitespace-nowrap py-2.5 pr-3">
                     {rupees(q.price)} /{' '}
                     {q.packSize ? `${q.packSize} ${unitWord(q.packUnit)}` : unitWord(q.unit)}
                     {q.deliveryCharge ? ` + ${rupees(q.deliveryCharge)} delivery` : ''}
                   </td>
-                  <td className="py-2 pr-3 whitespace-nowrap font-medium">
+                  <td className="tabular whitespace-nowrap py-2.5 pr-3 font-semibold">
                     {rupees(q.landedPricePerUnit)}
                   </td>
-                  <td className="py-2 text-stone-600 dark:text-stone-400">"{q.supplierWords}"</td>
+                  <td className="py-2.5 text-muted-fg">“{q.supplierWords}”</td>
                 </tr>
               ))}
             </tbody>
           </table>
-        </div>
+        </section>
       )}
     </Card>
   );
@@ -560,48 +708,45 @@ function QuoteBook({
 
 function LieCatcher({ view }: { view: OrderView }) {
   const blocked = view.events.filter((e) => e.type === 'blocked' || e.type === 'tool_blocked');
-  const errors = view.events.filter((e) => e.type === 'error' || e.type === 'upstream_down');
+  const problems = view.events.filter((e) => e.type === 'error' || e.type === 'upstream_down');
   return (
     <div className="flex min-w-0 flex-col gap-4">
       <Card
         title="Lie-catcher"
-        aside={<Pill tone={blocked.length ? 'bad' : 'good'}>{blocked.length} blocked</Pill>}
+        icon={ShieldCheck}
+        aside={<Pill tone={blocked.length ? 'danger' : 'success'}>{blocked.length} stopped</Pill>}
       >
-        <p className="text-sm text-stone-600 dark:text-stone-400">
+        <p className="text-muted-fg">
           Before Bhaav says anything, every number is checked against the quote book and what the
           supplier just said. A number it can't prove is never spoken.
         </p>
         {blocked.length > 0 && (
-          <ul className="mt-3 flex flex-col gap-2">
+          <ul className="mt-4 flex flex-col gap-2">
             {blocked.map((e) => (
               <li
                 key={e.id}
-                className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-900 dark:border-red-900 dark:bg-red-950/40 dark:text-red-100"
+                className="rounded-xl border border-danger/30 bg-danger-soft px-3 py-2.5 text-sm text-danger"
               >
-                <div className="font-medium">
+                <p className="font-semibold">
                   {e.type === 'blocked'
-                    ? `Blocked ${((e.detail?.unbacked as number[] | undefined) ?? []).map((n) => rupees(n)).join(', ')}: not in the quote book`
-                    : 'Blocked a quote the supplier never said'}
-                </div>
+                    ? `Stopped ${((e.detail?.unbacked as number[] | undefined) ?? []).map((n) => rupees(n)).join(', ')}: not in the quote book`
+                    : 'Stopped saving a price the supplier never said'}
+                </p>
                 {typeof e.detail?.sentence === 'string' && (
-                  <div className="mt-0.5 text-red-800/80 dark:text-red-200/80">
-                    "{e.detail.sentence}"
-                  </div>
+                  <p className="mt-0.5">“{e.detail.sentence}”</p>
                 )}
-                <div className="mt-0.5 text-xs text-red-700/70 dark:text-red-300/70">
-                  {timeLabel(e.createdAt)}
-                </div>
+                <p className="tabular mt-0.5 text-xs">{timeLabel(e.createdAt)}</p>
               </li>
             ))}
           </ul>
         )}
       </Card>
-      {errors.length > 0 && (
-        <Card title="Problems">
-          <ul className="flex flex-col gap-1 text-sm text-stone-600 dark:text-stone-400">
-            {errors.slice(0, 5).map((e) => (
+      {problems.length > 0 && (
+        <Card title="Problems" icon={WarningCircle}>
+          <ul className="flex flex-col gap-2 text-sm text-muted-fg">
+            {problems.slice(0, 5).map((e) => (
               <li key={e.id}>
-                {timeLabel(e.createdAt)}:{' '}
+                <span className="tabular">{timeLabel(e.createdAt)}</span>:{' '}
                 {typeof e.detail?.message === 'string'
                   ? e.detail.message
                   : 'The AI did not answer in time; Bhaav said its safe line.'}

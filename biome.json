@@ -10,7 +10,9 @@
       "!worker/worker-configuration.d.ts",
       "!bench/dry-results.json",
       "!web/src/bench-results.json",
-      "!bolna"
+      "!bolna",
+      "!test-results",
+      "!playwright-report"
     ]
   },
   "formatter": {
@@ -30,5 +32,22 @@
     "rules": {
       "preset": "recommended"
     }
-  }
+  },
+  "css": {
+    "parser": {
+      "tailwindDirectives": true
+    }
+  },
+  "overrides": [
+    {
+      "includes": ["web/src/index.css"],
+      "linter": {
+        "rules": {
+          "complexity": {
+            "noImportantStyles": "off"
+          }
+        }
+      }
+    }
+  ]
 }

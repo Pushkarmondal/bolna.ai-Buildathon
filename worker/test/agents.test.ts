@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { agentBody, dashboardTools } from '../src/agents';
+import { agentBody, callerGraph, dashboardTools } from '../src/agents';
 import { CALLER_PROMPT, DESK_PROMPT } from '../src/prompts';
 
 const setup = {
@@ -72,5 +72,56 @@ describe('prompts', () => {
     ];
     const used = new Set([...CALLER_PROMPT.matchAll(/\{([a-z_]+)\}/g)].map((m) => m[1]));
     expect([...used].sort()).toEqual([...sent].sort());
+  });
+});
+
+describe('languages', () => {
+  it('lets both agents switch between Hindi, English and Kannada', () => {
+    for (const kind of ['desk', 'caller'] as const) {
+      const config = agentBody(kind, setup).agent_config.tasks[0]?.tools_config.multilingual_config;
+      expect(config?.enabled).toBe(true);
+      expect(config?.active_language).toBe('hi');
+      expect(Object.keys(config?.languages ?? {}).sort()).toEqual(['en', 'hi', 'kn']);
+    }
+  });
+});
+
+describe('callerGraph', () => {
+  const graph = callerGraph(setup);
+  const ids = new Set(graph.nodes.map((n) => n.id));
+
+  it('starts at a node that exists, and every edge leads to one', () => {
+    expect(ids.has(graph.current_node_id)).toBe(true);
+    for (const node of graph.nodes)
+      for (const edge of node.edges)
+        expect(ids.has(edge.to_node_id), `${node.id} → ${edge.to_node_id}`).toBe(true);
+  });
+
+  it('keeps CALL_REF in the prompt every step sends, so the lie-catcher still works', () => {
+    expect(graph.agent_information).toContain('CALL_REF: {{call_ref}}');
+    expect(graph.provider).toBe('custom');
+  });
+
+  it('only references tools the Caller has', () => {
+    const tools = new Set(['save_quote', 'do_not_call']);
+    for (const node of graph.nodes) {
+      for (const [, name] of (node.prompt ?? '').matchAll(/@([a-z_]+)/g))
+        expect(tools.has(name ?? ''), name).toBe(true);
+    }
+  });
+
+  it('sends round 3 straight to the confirmation step and ends every path at close', () => {
+    const greet = graph.nodes.find((n) => n.id === 'greet');
+    expect(greet?.edges[0]).toMatchObject({
+      to_node_id: 'confirm_choice',
+      condition_type: 'expression',
+    });
+    const close = graph.nodes.find((n) => n.id === 'close');
+    expect(close).toMatchObject({ node_type: 'static', function_call: 'end_call' });
+  });
+
+  it('is what the caller-graph agent body carries', () => {
+    const llm = agentBody('caller-graph', setup).agent_config.tasks[0]?.tools_config.llm_agent;
+    expect(llm?.agent_type).toBe('graph_agent');
   });
 });

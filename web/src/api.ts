@@ -1,5 +1,6 @@
-import type { OrderView, Persona } from '@bhaav/shared';
+import type { OrderView, Persona, PriceSeries } from '@bhaav/shared';
 import { useQuery } from '@tanstack/react-query';
+import { isLive } from './format';
 
 export class ApiError extends Error {
   constructor(
@@ -53,7 +54,20 @@ export function useOrder(id: string) {
   return useQuery({
     queryKey: ['order', id],
     queryFn: () => api<OrderView>(`/api/requests/${id}`),
-    refetchInterval: (query) => (query.state.data?.order.status === 'approved' ? false : 2000),
+    refetchInterval: (query) => {
+      const view = query.state.data;
+      // An approved order only changes again while Bhaav is on the confirmation call.
+      if (view?.order.status === 'approved' && !view.calls.some((c) => isLive(c.status)))
+        return false;
+      return 2000;
+    },
+  });
+}
+
+export function usePrices() {
+  return useQuery({
+    queryKey: ['prices'],
+    queryFn: () => api<PriceSeries[]>('/api/prices'),
   });
 }
 

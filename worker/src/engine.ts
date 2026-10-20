@@ -142,6 +142,16 @@ export function formatRupees(n: number): string {
 }
 
 /** The counter-offer sentence fragment the Caller is given as `best_offer`. */
+/** A quote in the supplier's own terms: "₹2,250 per 15 litre pack, ₹100 delivery". */
+export function describeQuote(quote: QuoteTerms): string {
+  const per =
+    quote.unit === 'pack' && quote.packSize && quote.packUnit
+      ? `${quote.packSize} ${UNIT_WORDS[quote.packUnit]} pack`
+      : UNIT_WORDS[quote.unit];
+  const delivery = quote.deliveryCharge ? `, ${formatRupees(quote.deliveryCharge)} delivery` : '';
+  return `${formatRupees(quote.price)} per ${per}${delivery}`;
+}
+
 export function describeOffer(best: Landed, order: Order): string {
   if (best.perUnit === null) throw new Error('describeOffer needs a comparable quote');
   // Say "including delivery" only when a charge was quoted; never claim delivery is free.

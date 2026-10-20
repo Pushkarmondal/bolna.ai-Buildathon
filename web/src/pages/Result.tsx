@@ -1,12 +1,26 @@
-// The ranked quotes, what bargaining saved, the proof behind each price, and Approve.
+// The ranked quotes, what calling around saved, the proof behind each price, Approve, and what
+// comes after: the optional confirmation call, a WhatsApp summary, and how today compares.
 
 import type { OrderView } from '@bhaav/shared';
 import { useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
-import { Link, useParams } from 'react-router';
+import { useParams } from 'react-router';
 import { api, useOrder } from '../api';
-import { dateLabel, rupees, unitWord } from '../format';
-import { Button, Card, Notice, PageTitle, Pill } from '../ui';
+import { PriceChart, trendSentence } from '../chart';
+import { type Choice, choiceOf } from '../choice';
+import { callLabel, dateLabel, isLive, quoteTerms, rupees, unitWord } from '../format';
+import {
+  ArrowLeft,
+  ChartLineUp,
+  CheckCircle,
+  Copy,
+  PhoneCall,
+  SealCheck,
+  Trophy,
+  WhatsappLogo,
+} from '../icons';
+import { whatsappLink, whatsappSummary } from '../summary';
+import { Button, ButtonLink, Card, EmptyState, Notice, PageTitle, Pill, Stat } from '../ui';
 
 const REASONS: Record<string, string> = {
   unit: "priced in a unit that can't be compared",
@@ -21,27 +35,31 @@ export function ResultPage() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
 
-  if (order.isPending) return <p className="text-stone-500">Loading the results…</p>;
-  if (order.error || !order.data)
-    return <Notice tone="bad">{order.error?.message ?? 'Could not load the order.'}</Notice>;
+  if (order.isPending) return <p className="text-muted-fg">Loading the results…</p>;
+  if (order.error || !order.data) {
+    return <Notice tone="danger">{order.error?.message ?? 'Could not load the order.'}</Notice>;
+  }
   const view = order.data;
   const o = view.order;
+  const unit = unitWord(o.unit);
   const supplier = (sid: string) => view.suppliers.find((s) => s.id === sid);
   const quote = (qid: string) => view.quotes.find((q) => q.id === qid);
   const best = view.ranking.find((r) => r.quoteId === view.bestQuoteId);
   const finished = o.status === 'done' || o.status === 'approved';
   const saving =
     best?.perUnit != null && view.highestPerUnit != null
-      ? view.highestPerUnit - best.perUnit
+      ? Math.max(0, view.highestPerUnit - best.perUnit)
       : null;
-  const approved = o.approvedQuoteId ? quote(o.approvedQuoteId) : undefined;
+  const choice = choiceOf(view);
 
   async function approve(quoteId: string) {
     setBusy(quoteId);
     setError(null);
     try {
-      const next = await api<OrderView>(`/api/requests/${o.id}/approve`, { json: { quoteId } });
-      queryClient.setQueryData(['order', o.id], next);
+      queryClient.setQueryData(
+        ['order', o.id],
+        await api<OrderView>(`/api/requests/${o.id}/approve`, { json: { quoteId } }),
+      );
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not approve.');
     } finally {
@@ -52,142 +70,319 @@ export function ResultPage() {
   return (
     <>
       <PageTitle
-        title="Results"
-        sub={`${o.quantity ?? ''} ${unitWord(o.unit)} ${o.item ?? ''} for ${o.buyerName ?? 'you'}, by ${dateLabel(o.deliverBy)}`}
+        eyebrow="Results"
+        title={`${o.quantity ?? ''} ${unit} ${o.item ?? ''}`.trim()}
+        sub={`For ${o.buyerName ?? 'you'}, delivered by ${dateLabel(o.deliverBy)}`}
         aside={
-          <Link className="text-sm underline underline-offset-4" to={`/r/${o.id}`}>
+          <ButtonLink to={`/r/${o.id}`} variant="ghost" icon={ArrowLeft}>
             See the calls
-          </Link>
+          </ButtonLink>
         }
       />
 
-      {!finished && (
-        <div className="mb-4">
-          <Notice>Bhaav is still calling. These results update as quotes come in.</Notice>
-        </div>
-      )}
-      {approved && (
-        <div className="mb-4">
-          <Notice tone="good">
-            You approved {supplier(approved.supplierId)?.name} at{' '}
-            {rupees(approved.landedPricePerUnit)} per {unitWord(o.unit)}, delivered. Call them to
-            confirm the order; Bhaav does not place orders.
+      <div className="mb-4 flex flex-col gap-3">
+        {!finished && (
+          <Notice tone="info">
+            Bhaav is still calling. These results update as quotes come in.
           </Notice>
-        </div>
-      )}
-      {error && (
-        <div className="mb-4">
-          <Notice tone="bad">{error}</Notice>
-        </div>
-      )}
-
-      <div className="mb-4 grid gap-4 sm:grid-cols-3">
-        <Card>
-          <div className="text-sm text-stone-500">Best price</div>
-          <div className="mt-1 text-2xl font-semibold">
-            {best ? `${rupees(best.perUnit)} / ${unitWord(o.unit)}` : '—'}
-          </div>
-          <div className="text-sm text-stone-600 dark:text-stone-400">
-            {best ? supplier(best.supplierId)?.name : 'No usable quote yet'}
-          </div>
-        </Card>
-        <Card>
-          <div className="text-sm text-stone-500">Saved against the costliest quote</div>
-          <div className="mt-1 text-2xl font-semibold">
-            {saving != null && o.quantity != null ? rupees(Math.max(0, saving) * o.quantity) : '—'}
-          </div>
-          <div className="text-sm text-stone-600 dark:text-stone-400">
-            {saving != null && view.highestPerUnit
-              ? `${((Math.max(0, saving) / view.highestPerUnit) * 100).toFixed(1)}% less than ${rupees(view.highestPerUnit)} / ${unitWord(o.unit)}`
-              : 'Needs two or more quotes'}
-          </div>
-        </Card>
-        <Card>
-          <div className="text-sm text-stone-500">Order total at best price</div>
-          <div className="mt-1 text-2xl font-semibold">
-            {best?.perUnit != null && o.quantity != null ? rupees(best.perUnit * o.quantity) : '—'}
-          </div>
-          <div className="text-sm text-stone-600 dark:text-stone-400">
-            Delivery included where quoted
-          </div>
-        </Card>
+        )}
+        {error && <Notice tone="danger">{error}</Notice>}
       </div>
 
-      <Card title="Every supplier's latest quote, cheapest first">
-        {view.ranking.length === 0 ? (
-          <p className="text-sm text-stone-500">No quotes yet.</p>
-        ) : (
-          <ol className="flex flex-col gap-3">
-            {view.ranking.map((r, i) => {
-              const q = quote(r.quoteId);
-              const s = supplier(r.supplierId);
-              const call = q ? view.calls.find((c) => c.id === q.callId) : undefined;
-              const isBest = r.quoteId === view.bestQuoteId;
-              const isApproved = r.quoteId === o.approvedQuoteId;
-              return (
-                <li
-                  key={r.quoteId}
-                  className={`rounded-lg border p-3 ${isBest ? 'border-emerald-300 bg-emerald-50/50 dark:border-emerald-800 dark:bg-emerald-950/20' : 'border-stone-200 dark:border-stone-800'}`}
-                >
-                  <div className="flex flex-wrap items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <span className="text-sm text-stone-500">#{i + 1}</span>
-                        <span className="font-medium">{s?.name ?? 'Supplier'}</span>
-                        {isBest && <Pill tone="good">Best</Pill>}
-                        {isApproved && <Pill tone="good">Approved</Pill>}
+      <div className="mb-6 grid gap-4 sm:grid-cols-3">
+        <Stat
+          label="Best price, delivered"
+          value={best?.perUnit != null ? `${rupees(best.perUnit)} / ${unit}` : '—'}
+          note={best ? supplier(best.supplierId)?.name : 'No comparable quote yet'}
+        />
+        <Stat
+          label="Saved against the costliest quote"
+          value={saving != null && o.quantity != null ? rupees(saving * o.quantity) : '—'}
+          note={
+            saving != null && view.highestPerUnit
+              ? `${((saving / view.highestPerUnit) * 100).toFixed(1)}% less than ${rupees(view.highestPerUnit)} / ${unit}`
+              : 'Needs two or more quotes'
+          }
+          tone={saving ? 'success' : undefined}
+        />
+        <Stat
+          label="Order total at best price"
+          value={
+            best?.perUnit != null && o.quantity != null ? rupees(best.perUnit * o.quantity) : '—'
+          }
+          note="Delivery included where quoted"
+        />
+      </div>
+
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
+        <Card
+          title="Every supplier's latest quote"
+          icon={Trophy}
+          aside={<span className="text-sm text-muted-fg">Cheapest first</span>}
+        >
+          {view.ranking.length === 0 ? (
+            <EmptyState icon={Trophy} title="No quotes yet" />
+          ) : (
+            <ol className="flex flex-col gap-3">
+              {view.ranking.map((r, i) => {
+                const q = quote(r.quoteId);
+                const s = supplier(r.supplierId);
+                const call = q ? view.calls.find((c) => c.id === q.callId) : undefined;
+                const isBest = r.quoteId === view.bestQuoteId;
+                // The choice belongs to the supplier: it stays marked if they re-quote on the confirmation call.
+                const isApproved = r.supplierId === choice?.supplierId;
+                return (
+                  <li
+                    key={r.quoteId}
+                    className={`rounded-xl border p-4 ${isBest ? 'border-success/40 bg-success-soft/40' : 'border-border'}`}
+                  >
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="tabular text-sm text-muted-fg">#{i + 1}</span>
+                          <span className="font-semibold">{s?.name ?? 'Supplier'}</span>
+                          {isBest && (
+                            <Pill tone="success" icon={Trophy}>
+                              Best
+                            </Pill>
+                          )}
+                          {isApproved && (
+                            <Pill tone="success" icon={SealCheck}>
+                              Chosen
+                            </Pill>
+                          )}
+                        </div>
+                        <p className="mt-1">
+                          <span className="tabular font-display text-xl font-semibold">
+                            {rupees(r.perUnit)}
+                          </span>
+                          <span className="text-muted-fg"> per {unit}, delivered</span>
+                        </p>
+                        {q && (
+                          <p className="tabular mt-1 text-sm text-muted-fg">
+                            Quoted {quoteTerms(q)}
+                          </p>
+                        )}
+                        {r.reasons.length > 0 && (
+                          <p className="mt-1 text-sm text-warn">
+                            Can't win: {r.reasons.map((x) => REASONS[x] ?? x).join('; ')}
+                          </p>
+                        )}
+                        {q && (
+                          <p className="mt-1 text-sm text-muted-fg">
+                            Their words: “{q.supplierWords}”
+                          </p>
+                        )}
+                        {call?.recordingUrl && (
+                          // biome-ignore lint/a11y/useMediaCaption: call recordings have no caption file; the words are shown above
+                          <audio
+                            className="mt-2 w-full max-w-sm"
+                            controls
+                            preload="none"
+                            src={call.recordingUrl}
+                          >
+                            <a href={call.recordingUrl}>Recording</a>
+                          </audio>
+                        )}
                       </div>
-                      <div className="mt-1 text-sm">
-                        <span className="text-lg font-semibold">{rupees(r.perUnit)}</span>
-                        <span className="text-stone-500"> per {unitWord(o.unit)}, delivered</span>
-                      </div>
-                      {q && (
-                        <div className="mt-1 text-sm text-stone-600 dark:text-stone-400">
-                          Quoted {rupees(q.price)} per{' '}
-                          {q.packSize ? `${q.packSize} ${unitWord(q.packUnit)}` : unitWord(q.unit)}
-                          {q.deliveryCharge ? `, ${rupees(q.deliveryCharge)} delivery` : ''}
-                          {q.deliveryDate ? `, by ${dateLabel(q.deliveryDate)}` : ''}
-                          {q.paymentTerms ? `, ${q.paymentTerms}` : ''}
-                        </div>
-                      )}
-                      {r.reasons.length > 0 && (
-                        <div className="mt-1 text-sm text-amber-700 dark:text-amber-300">
-                          Not eligible: {r.reasons.map((x) => REASONS[x] ?? x).join('; ')}
-                        </div>
-                      )}
-                      {q && (
-                        <div className="mt-1 text-sm text-stone-500">
-                          Their words: "{q.supplierWords}"
-                        </div>
-                      )}
-                      {call?.recordingUrl && (
-                        // biome-ignore lint/a11y/useMediaCaption: call recordings have no caption file; the words are shown above
-                        <audio
-                          className="mt-2 w-full max-w-sm"
-                          controls
-                          preload="none"
-                          src={call.recordingUrl}
+                      {o.status === 'done' && r.reasons.length === 0 && r.perUnit !== null && (
+                        <Button
+                          variant={isBest ? 'cta' : 'secondary'}
+                          busy={busy === r.quoteId}
+                          icon={CheckCircle}
+                          onClick={() => approve(r.quoteId)}
                         >
-                          <a href={call.recordingUrl}>Recording</a>
-                        </audio>
+                          Approve
+                        </Button>
                       )}
                     </div>
-                    {o.status === 'done' && r.reasons.length === 0 && r.perUnit !== null && (
-                      <Button
-                        variant={isBest ? 'primary' : 'secondary'}
-                        busy={busy === r.quoteId}
-                        onClick={() => approve(r.quoteId)}
-                      >
-                        Approve
-                      </Button>
-                    )}
-                  </div>
-                </li>
-              );
-            })}
-          </ol>
-        )}
-      </Card>
+                  </li>
+                );
+              })}
+            </ol>
+          )}
+        </Card>
+
+        <div className="flex min-w-0 flex-col gap-4">
+          {choice && (
+            <ConfirmCard
+              view={view}
+              choice={choice}
+              supplierName={supplier(choice.supplierId)?.name ?? 'the supplier'}
+            />
+          )}
+          {view.ranking.length > 0 && <ShareCard view={view} />}
+          <MemoryCard view={view} />
+        </div>
+      </div>
     </>
+  );
+}
+
+function ConfirmCard({
+  view,
+  choice,
+  supplierName,
+}: {
+  view: OrderView;
+  choice: Choice;
+  supplierName: string;
+}) {
+  const queryClient = useQueryClient();
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const { confirmCall, changed, approved } = choice;
+
+  async function confirm() {
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await api<{ view: OrderView }>(`/api/requests/${view.order.id}/confirm`, {
+        method: 'POST',
+      });
+      queryClient.setQueryData(['order', view.order.id], result.view);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not place the call.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Card title={`You chose ${supplierName}`} icon={SealCheck}>
+      <p className="text-muted-fg">
+        Call them to place the order; Bhaav never places orders. Or let Bhaav tell them first: it
+        says you accept their quote and will call to arrange payment.
+      </p>
+      <div className="mt-4 flex flex-col gap-3">
+        {confirmCall ? (
+          <div>
+            <Pill
+              tone={
+                isLive(confirmCall.status)
+                  ? 'info'
+                  : confirmCall.status === 'completed'
+                    ? 'success'
+                    : 'warn'
+              }
+              pulse={isLive(confirmCall.status)}
+            >
+              Confirmation call: {callLabel(confirmCall.status)}
+            </Pill>
+          </div>
+        ) : (
+          <Button variant="primary" busy={busy} icon={PhoneCall} onClick={confirm}>
+            Ask Bhaav to tell {supplierName}
+          </Button>
+        )}
+        {changed ? (
+          <Notice tone="warn" title={`${supplierName} changed their quote on the call`}>
+            Now {quoteTerms(changed)}. You chose {quoteTerms(approved)}. Check with them before you
+            place the order.
+          </Notice>
+        ) : (
+          confirmCall?.status === 'completed' && (
+            <Notice tone="success">
+              Bhaav told {supplierName} you chose their quote of {quoteTerms(approved)}. They did
+              not change it on the call.
+            </Notice>
+          )
+        )}
+        {confirmCall && !isLive(confirmCall.status) && confirmCall.status !== 'completed' && (
+          <p className="text-sm text-muted-fg">
+            Bhaav could not reach them. Call {supplierName} yourself to place the order.
+          </p>
+        )}
+        {error && <Notice tone="danger">{error}</Notice>}
+      </div>
+    </Card>
+  );
+}
+
+function ShareCard({ view }: { view: OrderView }) {
+  const text = whatsappSummary(view);
+  const [copied, setCopied] = useState<'yes' | 'no' | null>(null);
+
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied('yes');
+    } catch {
+      setCopied('no');
+    }
+  }
+
+  return (
+    <Card title="Share the results" icon={WhatsappLogo}>
+      <pre className="max-h-56 overflow-auto whitespace-pre-wrap rounded-xl bg-muted p-3 font-sans text-sm text-fg">
+        {text}
+      </pre>
+      <div className="mt-3 flex flex-wrap gap-2">
+        <Button variant="secondary" icon={Copy} onClick={copy}>
+          Copy text
+        </Button>
+        <a
+          href={whatsappLink(text)}
+          target="_blank"
+          rel="noreferrer"
+          className="inline-flex min-h-11 cursor-pointer items-center gap-2 rounded-xl border border-input bg-card px-4 text-sm font-medium text-fg hover:bg-muted"
+        >
+          <WhatsappLogo size={18} weight="bold" aria-hidden />
+          Open in WhatsApp
+        </a>
+      </div>
+      <p className="mt-2 text-sm text-muted-fg" role="status">
+        {copied === 'yes'
+          ? 'Copied.'
+          : copied === 'no'
+            ? 'Could not copy here; select the text above instead.'
+            : ''}
+      </p>
+    </Card>
+  );
+}
+
+function MemoryCard({ view }: { view: OrderView }) {
+  const o = view.order;
+  const unit = unitWord(o.unit);
+  const best = view.ranking.find((r) => r.quoteId === view.bestQuoteId);
+  const previous = view.history.at(-1);
+  const points =
+    best?.perUnit != null
+      ? [
+          ...view.history,
+          { requestId: o.id, date: Date.now(), perUnit: best.perUnit, supplierName: 'today' },
+        ]
+      : view.history;
+
+  return (
+    <Card title="Price memory" icon={ChartLineUp}>
+      {view.history.length === 0 ? (
+        <p className="text-muted-fg">
+          This is the first {o.item ?? 'order'} bought through Bhaav. Next time, today's price shows
+          up here to compare.
+        </p>
+      ) : (
+        <>
+          <p>
+            Last time: <span className="tabular font-semibold">{rupees(previous?.perUnit)}</span> /{' '}
+            {unit} from {previous?.supplierName}
+            {best?.perUnit != null && previous && (
+              <span className={best.perUnit <= previous.perUnit ? 'text-success' : 'text-warn'}>
+                {' '}
+                ({best.perUnit <= previous.perUnit ? 'today is' : 'today is not'} cheaper)
+              </span>
+            )}
+            .
+          </p>
+          {points.length >= 4 && (
+            <div className="mt-3">
+              <PriceChart points={points} unit={unit} label={trendSentence(points, unit)} />
+            </div>
+          )}
+          <p className="mt-2 text-sm text-muted-fg">{trendSentence(points, unit)}</p>
+        </>
+      )}
+    </Card>
   );
 }

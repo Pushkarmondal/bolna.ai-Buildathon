@@ -119,11 +119,11 @@ const UNIT_SPELLINGS: Array<[number, string]> = [
 ];
 
 const MULTIPLIER_SPELLINGS: Array<[number, string]> = [
-  [100, 'hundred sau सौ'],
-  [1_000, 'thousand hazaar hazar hajar हज़ार हजार'],
-  [100_000, 'lakh lakhs laakh lac लाख'],
+  [100, 'hundred sau सौ nooru ನೂರು'],
+  [1_000, 'thousand hazaar hazar hajar हज़ार हजार saavira savira ಸಾವಿರ'],
+  [100_000, 'lakh lakhs laakh lac लाख laksha ಲಕ್ಷ'],
   [1_000_000, 'million'],
-  [10_000_000, 'crore crores karod karor करोड़ करोड'],
+  [10_000_000, 'crore crores karod karor करोड़ करोड koti ಕೋಟಿ'],
 ];
 
 /** Words that add to the number after them: "saade chaalis" is 40.5, "paune do sau" is 175. */
@@ -137,13 +137,13 @@ const PREFIX_SPELLINGS: Array<[number, string]> = [
 const AMBIGUOUS = new Set(['saath', 'sath']);
 
 const CURRENCY_WORDS = new Set(
-  'rupaye rupaiye rupaya rupay rupees rupee rs inr रुपये रुपए रुपया per prati प्रति'
+  'rupaye rupaiye rupaya rupay rupees rupee rs inr रुपये रुपए रुपया per prati प्रति rupayi ರೂಪಾಯಿ ರೂ'
     .split(' ')
     .map((w) => w.normalize('NFC')),
 );
 
 const QUANTITY_WORDS = new Set(
-  'kilo kilos kg kgs kilogram gram grams litre litres liter liters ltr quintal quintals ton tons tonne tonnes piece pieces dozen पीस किलो लीटर क्विंटल टन दर्जन'
+  'kilo kilos kg kgs kilogram gram grams litre litres liter liters ltr quintal quintals ton tons tonne tonnes piece pieces dozen पीस किलो लीटर क्विंटल टन दर्जन ಕೆಜಿ ಕಿಲೋ ಲೀಟರ್'
     .split(' ')
     .map((w) => w.normalize('NFC')),
 );
@@ -156,7 +156,69 @@ function spellingMap(entries: Array<[number, string]>): Map<string, number> {
   return map;
 }
 
-const UNITS = spellingMap(UNIT_SPELLINGS);
+// Kannada (romanised and Kannada script). 21-99 are written joined ("ಮೂವತ್ತೆರಡು", 32), so they
+// are generated from the tens and units below rather than listed one by one.
+const KANNADA_UNITS: Array<[number, string, string]> = [
+  [1, 'ondu', 'ಒಂದು'],
+  [2, 'eradu', 'ಎರಡು'],
+  [3, 'mooru', 'ಮೂರು'],
+  [4, 'naalku', 'ನಾಲ್ಕು'],
+  [5, 'aidu', 'ಐದು'],
+  [6, 'aaru', 'ಆರು'],
+  [7, 'elu', 'ಏಳು'],
+  [8, 'entu', 'ಎಂಟು'],
+  [9, 'ombattu', 'ಒಂಬತ್ತು'],
+];
+const KANNADA_TENS: Array<[number, string, string]> = [
+  [20, 'ippattu', 'ಇಪ್ಪತ್ತು'],
+  [30, 'moovattu', 'ಮೂವತ್ತು'],
+  [40, 'nalavattu', 'ನಲವತ್ತು'],
+  [50, 'aivattu', 'ಐವತ್ತು'],
+  [60, 'aravattu', 'ಅರವತ್ತು'],
+  [70, 'eppattu', 'ಎಪ್ಪತ್ತು'],
+  [80, 'embattu', 'ಎಂಬತ್ತು'],
+  [90, 'tombattu', 'ತೊಂಬತ್ತು'],
+];
+const KANNADA_TEENS: Array<[number, string]> = [
+  [10, 'hattu ಹತ್ತು'],
+  [11, 'hannondu ಹನ್ನೊಂದು'],
+  [12, 'hanneradu ಹನ್ನೆರಡು'],
+  [13, 'hadimooru ಹದಿಮೂರು'],
+  [14, 'hadinaalku ಹದಿನಾಲ್ಕು'],
+  [15, 'hadinaidu ಹದಿನೈದು'],
+  [16, 'hadinaaru ಹದಿನಾರು'],
+  [17, 'hadinelu ಹದಿನೇಳು'],
+  [18, 'hadinentu ಹದಿನೆಂಟು'],
+  [19, 'hattombattu ಹತ್ತೊಂಬತ್ತು'],
+];
+/** A Kannada vowel letter becomes its vowel sign when it joins a consonant: ಒ → ೊ. */
+const VOWEL_SIGNS: Record<string, string> = { ಅ: '', ಆ: 'ಾ', ಎ: 'ೆ', ಏ: 'ೇ', ಐ: 'ೈ', ಒ: 'ೊ', ಓ: 'ೋ' };
+
+function kannadaSpellings(): Array<[number, string]> {
+  const out: Array<[number, string]> = [...KANNADA_TEENS];
+  for (const [value, roman, script] of [...KANNADA_UNITS, ...KANNADA_TENS])
+    out.push([value, `${roman} ${script}`]);
+  for (const [tens, tensRoman, tensScript] of KANNADA_TENS) {
+    // ippattu → ippatt(a); ಇಪ್ಪತ್ತು → ಇಪ್ಪತ್ತ (dropping the final u sign).
+    const romanStem = tensRoman.slice(0, -1);
+    const scriptStem = tensScript.slice(0, -1);
+    for (const [unit, unitRoman, unitScript] of KANNADA_UNITS) {
+      const first = unitScript[0] ?? '';
+      const sign = VOWEL_SIGNS[first];
+      const joinedScript =
+        sign === undefined
+          ? `${scriptStem}${unitScript}`
+          : `${scriptStem}${sign}${unitScript.slice(1)}`;
+      const joinedRoman = /^[aeiou]/.test(unitRoman)
+        ? `${romanStem}${unitRoman}`
+        : `${romanStem}a${unitRoman}`;
+      out.push([tens + unit, `${joinedRoman} ${joinedScript}`]);
+    }
+  }
+  return out;
+}
+
+const UNITS = spellingMap([...UNIT_SPELLINGS, ...kannadaSpellings()]);
 const MULTIPLIERS = spellingMap(MULTIPLIER_SPELLINGS);
 const PREFIXES = spellingMap(PREFIX_SPELLINGS);
 
@@ -172,8 +234,11 @@ interface Token {
 
 const TOKEN = /\d[\d,]*(?:\.\d+)?|[\p{L}\p{M}]+/gu;
 
+/** Devanagari (०-९) and Kannada (೦-೯) digits become 0-9. */
 function toAsciiDigits(text: string): string {
-  return text.replace(/[०-९]/g, (d) => String(d.charCodeAt(0) - 0x0966));
+  return text
+    .replace(/[०-९]/g, (d) => String(d.charCodeAt(0) - 0x0966))
+    .replace(/[೦-೯]/g, (d) => String(d.charCodeAt(0) - 0x0ce6));
 }
 
 /** "1,600" and "1,00,000" are one number; "30,32" is two. */

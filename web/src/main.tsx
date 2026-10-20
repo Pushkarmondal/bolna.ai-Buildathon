@@ -1,24 +1,35 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { StrictMode } from 'react';
+import { lazy, StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { createBrowserRouter, RouterProvider } from 'react-router';
-import { Layout } from './App';
-import { BenchPage } from './pages/Bench';
+import { Layout, NotFound, RouteError } from './App';
 import { HomePage } from './pages/Home';
-import { OrderPage } from './pages/Order';
-import { PlayPage } from './pages/Play';
-import { ResultPage } from './pages/Result';
 import './index.css';
+
+// Home comes with the app; every other page is its own file, fetched the first time it is opened.
+const OrderPage = lazy(() => import('./pages/Order').then((m) => ({ default: m.OrderPage })));
+const ResultPage = lazy(() => import('./pages/Result').then((m) => ({ default: m.ResultPage })));
+const PricesPage = lazy(() => import('./pages/Prices').then((m) => ({ default: m.PricesPage })));
+const PlayPage = lazy(() => import('./pages/Play').then((m) => ({ default: m.PlayPage })));
+const BenchPage = lazy(() => import('./pages/Bench').then((m) => ({ default: m.BenchPage })));
 
 const router = createBrowserRouter([
   {
     element: <Layout />,
     children: [
-      { path: '/', element: <HomePage /> },
-      { path: '/r/:id', element: <OrderPage /> },
-      { path: '/r/:id/result', element: <ResultPage /> },
-      { path: '/play', element: <PlayPage /> },
-      { path: '/bench', element: <BenchPage /> },
+      {
+        // A page that fails to load or render shows inside the header and nav, not on a blank screen.
+        errorElement: <RouteError />,
+        children: [
+          { path: '/', element: <HomePage /> },
+          { path: '/r/:id', element: <OrderPage /> },
+          { path: '/r/:id/result', element: <ResultPage /> },
+          { path: '/prices', element: <PricesPage /> },
+          { path: '/play', element: <PlayPage /> },
+          { path: '/bench', element: <BenchPage /> },
+          { path: '*', element: <NotFound /> },
+        ],
+      },
     ],
   },
 ]);

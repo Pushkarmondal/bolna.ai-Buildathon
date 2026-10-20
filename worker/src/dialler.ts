@@ -17,7 +17,7 @@ import {
   type SupplierRow,
   suppliers,
 } from './db/schema';
-import { bestOffer, describeOffer, round2List } from './engine';
+import { bestOffer, describeOffer, describeQuote, round2List } from './engine';
 import { newId } from './ids';
 import { dateWords, orderOf, quantityWords, toTerms } from './orders';
 
@@ -30,6 +30,8 @@ const LIVE: CallStatus[] = [
   'in-progress',
   'call-disconnected',
 ];
+
+const LANGUAGE_NAMES: Record<string, string> = { hi: 'Hindi', en: 'English', kn: 'Kannada' };
 
 export const isFinal = (status: string) =>
   (FINAL_CALL_STATUSES as readonly string[]).includes(status);
@@ -92,7 +94,9 @@ export function callerUserData(
     deliver_by: dateWords(request.deliverBy),
     round: String(call.round),
     best_offer: bestOfferText ?? 'none',
-    language: supplier.language === 'en' ? 'English' : 'Hindi',
+    language: LANGUAGE_NAMES[supplier.language] ?? 'Hindi',
+    // Starts a multilingual Bolna agent in the supplier's language.
+    agent_language: supplier.language in LANGUAGE_NAMES ? supplier.language : 'hi',
   };
 }
 
@@ -233,6 +237,54 @@ export async function advance(
 
   if (outcome === 'failed' && depth < 20) return advance(env, db, requestId, depth + 1);
   return outcome === 'dialled' ? 'dialled' : 'waiting';
+}
+
+/**
+ * Round 3, only when the buyer asks: after they approve a quote, Bhaav calls that supplier to say
+ * the buyer has chosen them and will call to place the order. It never places the order itself.
+ */
+export async function confirmChoice(
+  env: DiallerEnv,
+  db: Db,
+  requestId: string,
+): Promise<{ ok: boolean; message: string }> {
+  const request = await db.select().from(requests).where(eq(requests.id, requestId)).get();
+  if (!request) return { ok: false, message: 'No such order.' };
+  if (request.status !== 'approved' || !request.approvedQuoteId) {
+    return { ok: false, message: 'Approve a quote first.' };
+  }
+  const quote = await db.select().from(quotes).where(eq(quotes.id, request.approvedQuoteId)).get();
+  const supplier = quote
+    ? await db.select().from(suppliers).where(eq(suppliers.id, quote.supplierId)).get()
+    : undefined;
+  if (!quote || !supplier) return { ok: false, message: 'The approved quote is missing.' };
+  if (supplier.phone === 'web')
+    return { ok: false, message: 'Practice suppliers cannot be called.' };
+  if (supplier.doNotCall)
+    return { ok: false, message: `${supplier.name} asked not to be called again.` };
+  if (env.allowlist.size > 0 && !env.allowlist.has(supplier.phone)) {
+    return { ok: false, message: 'This number is not on the approved list.' };
+  }
+  if (!env.callerAgentId)
+    return { ok: false, message: 'The Caller agent is not set up (BOLNA_CALLER_AGENT_ID).' };
+  const already = await db
+    .select({ id: calls.id })
+    .from(calls)
+    .where(
+      and(eq(calls.requestId, requestId), eq(calls.supplierId, supplier.id), eq(calls.round, 3)),
+    )
+    .get();
+  if (already)
+    return { ok: false, message: `Bhaav has already called ${supplier.name} to confirm.` };
+  if ((await callsInLastDay(db)) >= env.maxCallsPerDay) {
+    return { ok: false, message: `The daily limit of ${env.maxCallsPerDay} calls is reached.` };
+  }
+
+  const outcome = await dial(env, db, request, supplier, 3, describeQuote(toTerms(quote)));
+  if (outcome === 'dialled') return { ok: true, message: `Calling ${supplier.name} to confirm.` };
+  if (outcome === 'raced')
+    return { ok: false, message: `Bhaav is already calling ${supplier.name}.` };
+  return { ok: false, message: 'Bolna would not place the call. See Problems on the calls page.' };
 }
 
 /**
