@@ -166,8 +166,9 @@ export function MoreLink({ children, ...rest }: LinkProps) {
   );
 }
 
+// Focus is one thin border turning near-black (near-white in dark): no blue glow, no second ring.
 export const inputClass =
-  'block min-h-11 w-full min-w-0 rounded-xl border border-input bg-card px-3.5 py-2 text-[17px] text-fg placeholder:text-muted-fg transition-shadow duration-200 focus:border-accent focus:outline-none focus:ring-4 focus:ring-accent/20 aria-[invalid=true]:border-danger';
+  'block min-h-11 w-full min-w-0 rounded-xl border border-input bg-card px-3.5 py-2 text-[17px] text-fg placeholder:text-muted-fg transition-colors duration-200 focus:border-fg focus:outline-none aria-[invalid=true]:border-danger';
 
 /** Props that link an input to its label, hint and error. */
 export function fieldProps(

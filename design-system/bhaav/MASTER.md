@@ -262,6 +262,7 @@ One blue for actions. Green only for savings and good status. Every status also 
 - `.surface`: white card, 22px corners, `0 1px 2px / 4%, 0 8px 28px / 6%` shadow in light; `#2C2C2E` hairline in dark.
 - `.glass`: the top bar and the phone tab bar only, `saturate(180%) blur(20px)` over 72% white or near-black. Solid when the person asks for reduced transparency or the browser has no backdrop filter.
 - Buttons are pills (fully rounded), 44px (48px large). Filled blue for the action, a hairline pill with blue text beside it.
+- Focus is never a blue ring. A focused field's 1px border turns near-black (near-white in dark), with no glow; keyboard focus on buttons and links is a 2px neutral outline. Blue stays for fills and text only (the founder's no-bold-blue-borders rule).
 - Lists are grouped rows divided by hairlines inside one card (like iOS Settings), not separate boxes.
 - Inner wells (figures, transcripts, the WhatsApp text) use the page grey inside the white card.
 

@@ -52,7 +52,8 @@
   --accent: #0071e3;
   --on-accent: #ffffff;
   --link: #0066cc;
-  --ring: #0071e3;
+  /* Keyboard focus is neutral, never a bold blue ring (the founder's standing rule). */
+  --ring: #1d1d1f;
   --success-fg: #1d7a35;
   --success-bg: #e3f5e8;
   --warn-fg: #a24800;
@@ -83,7 +84,7 @@
     --accent: #0071e3;
     --on-accent: #ffffff;
     --link: #2997ff;
-    --ring: #2997ff;
+    --ring: #f5f5f7;
     --success-fg: #30d158;
     --success-bg: #0f2e18;
     --warn-fg: #ff9f0a;
@@ -126,48 +127,56 @@
   }
 }
 
-html {
-  font-family: var(--font-sans);
-  -webkit-text-size-adjust: 100%;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-  text-rendering: optimizeLegibility;
-}
+/*
+ * Page-wide defaults live in Tailwind's base layer, so any utility class on an element wins over
+ * them (a field's focus:outline-none, a headline's own tracking). Unlayered rules would beat
+ * every utility regardless of specificity.
+ */
+@layer base {
+  html {
+    font-family: var(--font-sans);
+    -webkit-text-size-adjust: 100%;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+  }
 
-body {
-  background: var(--bg);
-  color: var(--fg);
-  font-size: 17px;
-  line-height: 1.47;
-  letter-spacing: -0.022em;
-  /* A name or a quote with no spaces wraps instead of pushing out of its card. */
-  overflow-wrap: anywhere;
-}
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    font-size: 17px;
+    line-height: 1.47;
+    letter-spacing: -0.022em;
+    /* A name or a quote with no spaces wraps instead of pushing out of its card. */
+    overflow-wrap: anywhere;
+  }
 
-h1,
-h2,
-h3 {
-  font-family: var(--font-display);
-  text-wrap: balance;
-  letter-spacing: -0.028em;
-}
+  h1,
+  h2,
+  h3 {
+    font-family: var(--font-display);
+    text-wrap: balance;
+    letter-spacing: -0.028em;
+  }
 
-/* Prices and timers don't jump as digits change. */
-.tabular {
-  font-variant-numeric: tabular-nums;
-}
+  /* Prices and timers don't jump as digits change. */
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
 
-:focus-visible {
-  outline: 2px solid var(--ring);
-  outline-offset: 3px;
-}
+  /* Only for keyboard use (a mouse click never shows it); fields draw their own thin border instead. */
+  :focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+  }
 
-a,
-button,
-select,
-summary,
-input[type="checkbox"] {
-  touch-action: manipulation;
+  a,
+  button,
+  select,
+  summary,
+  input[type="checkbox"] {
+    touch-action: manipulation;
+  }
 }
 
 /* Each page settles in: a short fade and rise, as Apple's pages do. */
