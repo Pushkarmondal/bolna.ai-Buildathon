@@ -1,0 +1,2 @@
+CREATE UNIQUE INDEX `calls_one_per_round` ON `calls` (`request_id`,`supplier_id`,`round`);--> statement-breakpoint
+CREATE UNIQUE INDEX `calls_one_live_per_order` ON `calls` (`request_id`) WHERE "calls"."channel" = 'phone' and "calls"."status" in ('scheduled', 'queued', 'rescheduled', 'initiated', 'ringing', 'in-progress', 'call-disconnected');

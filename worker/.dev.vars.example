@@ -1,0 +1,23 @@
+# Copy to .dev.vars for `wrangler dev`, then fill in. Never commit .dev.vars.
+# In production, set each secret with `npx wrangler secret put NAME` (run inside worker/).
+# Make random values with: openssl rand -hex 24
+
+# Groq API key (console.groq.com/keys). Used only by /v1/chat/completions.
+GROQ_API_KEY=
+# The custom LLM's key: Bolna sends it as `Authorization: Bearer …` to /v1/chat/completions.
+LLM_SECRET=
+# Bolna API key (bn-…), to place calls, mint browser-call sessions and read executions.
+BOLNA_API_KEY=
+# Sent by Bolna's custom functions to /tools/*.
+TOOL_SECRET=
+# The last part of the webhook URL: /webhooks/bolna/<WEBHOOK_SECRET>.
+WEBHOOK_SECRET=
+# What people type to open the app. Make it long; it guards real phone calls.
+APP_PASSCODE=
+# Signs the session cookie.
+COOKIE_SECRET=
+
+# Local run without Bolna: start `npm run fake-bolna` and uncomment these.
+# BOLNA_BASE_URL=http://localhost:8790
+# BOLNA_DESK_AGENT_ID=fake-desk
+# BOLNA_CALLER_AGENT_ID=fake-caller

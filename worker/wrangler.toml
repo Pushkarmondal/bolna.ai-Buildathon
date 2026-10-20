@@ -1,0 +1,39 @@
+name = "bhaav"
+main = "src/index.ts"
+compatibility_date = "2026-10-01"
+
+# The built web app. Routes the Worker owns run first; everything else is the single-page app.
+[assets]
+directory = "../web/dist"
+not_found_handling = "single-page-application"
+run_worker_first = ["/api/*", "/v1/*", "/tools/*", "/webhooks/*"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "bhaav"
+# Replace with the id printed by `npx wrangler d1 create bhaav` before the first remote deploy.
+database_id = "00000000-0000-0000-0000-000000000000"
+migrations_dir = "migrations"
+
+# Every minute: catch up on calls whose webhook never arrived.
+[triggers]
+crons = ["* * * * *"]
+
+[vars]
+# Tried in order; the next one is used when Groq answers 429 or 5xx.
+GROQ_MODELS = "openai/gpt-oss-20b,openai/gpt-oss-120b,qwen/qwen3.8-27b"
+GROQ_BASE_URL = "https://api.groq.com/openai/v1"
+BOLNA_BASE_URL = "https://api.bolna.ai"
+# Printed by `npm run agents:setup`; paste them here.
+BOLNA_DESK_AGENT_ID = ""
+BOLNA_CALLER_AGENT_ID = ""
+# Optional: a number bought in Bolna. Empty uses Bolna's default number.
+BOLNA_FROM_NUMBER = ""
+# Comma-separated E.164 numbers Bhaav may call (e.g. "+919800000001,+919800000002").
+# Empty allows any number. Set it before topping up Bolna, so nobody can make Bhaav call a stranger.
+SUPPLIER_ALLOWLIST = ""
+# A ceiling on phone calls in any 24 hours, to protect the credit.
+MAX_CALLS_PER_DAY = "60"
+
+[observability]
+enabled = true

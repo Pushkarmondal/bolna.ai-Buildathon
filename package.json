@@ -1,0 +1,32 @@
+{
+  "name": "bhaav",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "shared",
+    "worker",
+    "web"
+  ],
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "dev:worker": "npm run dev -w worker",
+    "dev:web": "npm run dev -w web",
+    "build": "npm run build -w web",
+    "test": "npm run test -w worker",
+    "typecheck": "npm run typecheck --workspaces --if-present && tsc -p tsconfig.scripts.json",
+    "lint": "biome check .",
+    "format": "biome format --write .",
+    "agents:print": "tsx scripts/setup-agents.ts --dry",
+    "agents:setup": "tsx scripts/setup-agents.ts",
+    "bench": "tsx bench/run.ts",
+    "fake-bolna": "tsx scripts/fake-bolna.ts"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.15",
+    "@types/node": "24.19.2",
+    "tsx": "4.23.15",
+    "typescript": "7.0.2"
+  }
+}
