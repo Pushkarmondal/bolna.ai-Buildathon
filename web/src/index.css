@@ -1,15 +1,17 @@
 @import "tailwindcss";
 
 /*
- * Bhaav's design tokens (design-system/bhaav/MASTER.md, adjusted in its "Bhaav adjustments" section).
- * Swiss-style minimalism: navy for structure, green only for the one main action and for savings.
+ * Bhaav's design tokens: an Apple-style system (design-system/bhaav/MASTER.md, "Apple direction").
+ * Neutral greys carry the structure, one blue carries the actions, green is kept for savings.
  * Every text pair is at least 4.5:1 in both themes (checked by script, not by eye).
  */
 @theme inline {
   --font-sans:
-    "Work Sans", "Noto Sans Devanagari", "Noto Sans Kannada", ui-sans-serif, system-ui, sans-serif;
+    -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", "Noto Sans Devanagari",
+    "Noto Sans Kannada", system-ui, sans-serif;
   --font-display:
-    "Outfit", "Noto Sans Devanagari", "Noto Sans Kannada", ui-sans-serif, system-ui, sans-serif;
+    -apple-system, BlinkMacSystemFont, "SF Pro Display", "Inter", "Noto Sans Devanagari",
+    "Noto Sans Kannada", system-ui, sans-serif;
 
   --color-bg: var(--bg);
   --color-fg: var(--fg);
@@ -32,69 +34,114 @@
   --color-danger-soft: var(--danger-bg);
   --color-info: var(--info-fg);
   --color-info-soft: var(--info-bg);
+
+  --ease-apple: cubic-bezier(0.25, 0.1, 0.25, 1);
 }
 
 :root {
   color-scheme: light;
-  --bg: #f8fafc;
-  --fg: #0f172a;
+  --bg: #f5f5f7;
+  --fg: #1d1d1f;
   --card: #ffffff;
-  --muted: #f1f5f9;
-  --muted-fg: #475569;
-  --border: #e2e8f0;
-  --input-border: #64748b;
-  --primary: #1e3a5f;
+  --muted: #e8e8ed;
+  --muted-fg: #636366;
+  --border: #d2d2d7;
+  --input-border: #86868b;
+  --primary: #1d1d1f;
   --on-primary: #ffffff;
-  --accent: #047857;
+  --accent: #0071e3;
   --on-accent: #ffffff;
-  --link: #1d4ed8;
-  --ring: #2563eb;
-  --success-fg: #065f46;
-  --success-bg: #d1fae5;
-  --warn-fg: #92400e;
-  --warn-bg: #fef3c7;
-  --danger-fg: #991b1b;
-  --danger-bg: #fee2e2;
-  --info-fg: #1e40af;
-  --info-bg: #dbeafe;
+  --link: #0066cc;
+  --ring: #0071e3;
+  --success-fg: #1d7a35;
+  --success-bg: #e3f5e8;
+  --warn-fg: #a24800;
+  --warn-bg: #fff1e0;
+  --danger-fg: #c4001b;
+  --danger-bg: #ffe9eb;
+  --info-fg: #0066cc;
+  --info-bg: #e8f1fc;
+  /* Cards float on the grey page with a soft shadow; no outline. */
+  --card-shadow: 0 1px 2px rgb(0 0 0 / 0.04), 0 8px 28px rgb(0 0 0 / 0.06);
+  /* Frosted bars: translucent over whatever scrolls beneath them. */
+  --chrome: rgb(255 255 255 / 0.72);
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
     color-scheme: dark;
-    --bg: #0b1220;
-    --fg: #e2e8f0;
-    --card: #111a2b;
-    --muted: #1a2438;
-    --muted-fg: #a3b1c6;
-    --border: #243049;
-    --input-border: #7c8ba1;
-    --primary: #9db9de;
-    --on-primary: #0b1626;
-    --accent: #34d399;
-    --on-accent: #052e1c;
-    --link: #93c5fd;
-    --ring: #93c5fd;
-    --success-fg: #a7f3d0;
-    --success-bg: #064e3b;
-    --warn-fg: #fde68a;
-    --warn-bg: #78350f;
-    --danger-fg: #fecaca;
-    --danger-bg: #7f1d1d;
-    --info-fg: #bfdbfe;
-    --info-bg: #1e3a8a;
+    --bg: #000000;
+    --fg: #f5f5f7;
+    --card: #1c1c1e;
+    --muted: #2c2c2e;
+    --muted-fg: #a1a1a6;
+    --border: #38383a;
+    --input-border: #8e8e93;
+    --primary: #f5f5f7;
+    --on-primary: #000000;
+    /* The light-mode blue keeps white button text at 4.7:1; Apple's dark blue would not. */
+    --accent: #0071e3;
+    --on-accent: #ffffff;
+    --link: #2997ff;
+    --ring: #2997ff;
+    --success-fg: #30d158;
+    --success-bg: #0f2e18;
+    --warn-fg: #ff9f0a;
+    --warn-bg: #3a2600;
+    --danger-fg: #ff6961;
+    --danger-bg: #3b1214;
+    --info-fg: #64b5ff;
+    --info-bg: #0b2a4a;
+    /* No shadow on black: a hairline separates the card instead. */
+    --card-shadow: 0 0 0 1px #2c2c2e;
+    --chrome: rgb(22 22 23 / 0.72);
+  }
+}
+
+/* A card: white on the grey page, 22px corners, shadow in light and a hairline in dark. */
+@utility surface {
+  background-color: var(--card);
+  border-radius: 22px;
+  box-shadow: var(--card-shadow);
+}
+
+/* Frosted glass for the bars only; content stays on solid surfaces. */
+@utility glass {
+  background-color: var(--chrome);
+  -webkit-backdrop-filter: saturate(180%) blur(20px);
+  backdrop-filter: saturate(180%) blur(20px);
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .glass {
+    background-color: var(--card);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+}
+
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .glass {
+    background-color: var(--card);
   }
 }
 
 html {
   font-family: var(--font-sans);
   -webkit-text-size-adjust: 100%;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
 }
 
 body {
   background: var(--bg);
   color: var(--fg);
-  line-height: 1.5;
+  font-size: 17px;
+  line-height: 1.47;
+  letter-spacing: -0.022em;
+  /* A name or a quote with no spaces wraps instead of pushing out of its card. */
+  overflow-wrap: anywhere;
 }
 
 h1,
@@ -102,6 +149,7 @@ h2,
 h3 {
   font-family: var(--font-display);
   text-wrap: balance;
+  letter-spacing: -0.028em;
 }
 
 /* Prices and timers don't jump as digits change. */
@@ -110,8 +158,8 @@ h3 {
 }
 
 :focus-visible {
-  outline: 3px solid var(--ring);
-  outline-offset: 2px;
+  outline: 2px solid var(--ring);
+  outline-offset: 3px;
 }
 
 a,
@@ -120,6 +168,22 @@ select,
 summary,
 input[type="checkbox"] {
   touch-action: manipulation;
+}
+
+/* Each page settles in: a short fade and rise, as Apple's pages do. */
+@keyframes page-enter {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.page-enter {
+  animation: page-enter 420ms var(--ease-apple) both;
 }
 
 @media (prefers-reduced-motion: reduce) {

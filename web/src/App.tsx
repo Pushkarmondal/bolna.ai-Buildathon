@@ -1,10 +1,19 @@
 import { useQueryClient } from '@tanstack/react-query';
-import { type FormEvent, Suspense, useState } from 'react';
-import { NavLink, Outlet, useRouteError } from 'react-router';
-import { api, useAuth, useHealth } from './api';
+import { type FormEvent, type ReactNode, Suspense, useState } from 'react';
+import { NavLink, Outlet, useLocation, useRouteError } from 'react-router';
+import { ApiError, api, useAuth, useHealth } from './api';
 import type { Icon } from './icons';
 import { ArrowClockwise, ChartLineUp, Flask, House, LockKey, Storefront } from './icons';
-import { Button, Card, Field, fieldProps, inputClass, Pill, Spinner } from './ui';
+import {
+  Button,
+  Field,
+  fieldProps,
+  inputClass,
+  MoreLink,
+  Pill,
+  Spinner,
+  useDocumentTitle,
+} from './ui';
 
 const NAV: Array<{ to: string; label: string; short: string; icon: Icon }> = [
   { to: '/', label: 'New order', short: 'Order', icon: House },
@@ -15,11 +24,32 @@ const NAV: Array<{ to: string; label: string; short: string; icon: Icon }> = [
 
 function ServerStatus() {
   const health = useHealth();
-  if (health.data?.ok) return <Pill tone="success">Online</Pill>;
+  if (health.data?.ok)
+    return (
+      <span className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-fg">
+        <span className="size-2 rounded-full bg-success motion-safe:animate-pulse" aria-hidden />
+        Online
+      </span>
+    );
   return <Pill tone="warn">{health.isPending ? 'Connecting…' : 'Server offline'}</Pill>;
 }
 
+/** The ₹ mark: a dark rounded tile, like an app icon. */
+function Mark({ size = 'sm' }: { size?: 'sm' | 'lg' }) {
+  return (
+    <span
+      className={`grid shrink-0 place-items-center bg-primary font-display font-semibold text-on-primary ${
+        size === 'lg' ? 'size-14 rounded-[16px] text-[28px]' : 'size-7 rounded-[8px] text-[15px]'
+      }`}
+      aria-hidden
+    >
+      ₹
+    </span>
+  );
+}
+
 function Gate() {
+  useDocumentTitle('Enter the passcode');
   const queryClient = useQueryClient();
   const [passcode, setPasscode] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -44,94 +74,97 @@ function Gate() {
   }
 
   return (
-    <div className="mx-auto mt-8 max-w-sm sm:mt-16">
-      <Card title="Enter the passcode" icon={LockKey}>
-        <form onSubmit={submit} className="flex flex-col gap-4" noValidate>
-          <p className="text-sm text-muted-fg">
-            Bhaav makes real phone calls, so it is behind a passcode. Judges: it is in the
-            submission.
-          </p>
-          <Field id="passcode" label="Passcode" error={error}>
-            <input
-              className={inputClass}
-              type="password"
-              autoComplete="current-password"
-              value={passcode}
-              onChange={(e) => setPasscode(e.target.value)}
-              {...fieldProps('passcode', { error })}
-            />
-          </Field>
-          <Button type="submit" variant="primary" size="lg" busy={busy}>
-            Open Bhaav
-          </Button>
-        </form>
-      </Card>
+    <div className="mx-auto mt-6 flex max-w-sm flex-col items-center text-center sm:mt-16">
+      <Mark size="lg" />
+      <h1 className="mt-5 text-[34px] font-bold leading-tight">Enter the passcode</h1>
+      <p className="mt-2 text-[17px] text-muted-fg">
+        Bhaav makes real phone calls, so it is behind a passcode. Judges: it is in the submission.
+      </p>
+      <form
+        onSubmit={submit}
+        className="surface mt-8 flex w-full flex-col gap-4 p-6 text-left"
+        noValidate
+      >
+        <Field id="passcode" label="Passcode" error={error}>
+          <input
+            className={inputClass}
+            type="password"
+            autoComplete="current-password"
+            value={passcode}
+            onChange={(e) => setPasscode(e.target.value)}
+            {...fieldProps('passcode', { error })}
+          />
+        </Field>
+        <Button type="submit" variant="primary" size="lg" busy={busy} icon={LockKey}>
+          Open Bhaav
+        </Button>
+      </form>
     </div>
   );
 }
 
 export function Layout() {
   const auth = useAuth();
+  const location = useLocation();
   return (
     <div className="min-h-dvh bg-bg text-fg">
       <a
         href="#main"
-        className="sr-only focus:not-sr-only focus:fixed focus:left-3 focus:top-3 focus:z-50 focus:rounded-lg focus:bg-card focus:px-3 focus:py-2"
+        className="sr-only focus:not-sr-only focus:fixed focus:left-3 focus:top-3 focus:z-50 focus:rounded-full focus:bg-card focus:px-4 focus:py-2"
       >
         Skip to main content
       </a>
-      <header className="sticky top-0 z-20 border-b border-border bg-card/90 backdrop-blur">
-        <div className="mx-auto flex max-w-6xl items-center gap-6 px-4 py-3">
-          <NavLink to="/" className="flex min-h-11 items-center gap-2" aria-label="Bhaav home">
-            <span
-              className="grid size-8 place-items-center rounded-lg bg-primary font-display text-base font-bold text-on-primary"
-              aria-hidden
-            >
-              ₹
-            </span>
-            <span className="font-display text-lg font-semibold">
+      <header className="glass sticky top-0 z-20 border-b border-border/70">
+        <div className="mx-auto flex h-13 max-w-5xl items-center gap-6 px-5">
+          <NavLink to="/" className="flex min-h-11 items-center gap-2.5" aria-label="Bhaav home">
+            <Mark />
+            <span className="text-[17px] font-semibold">
               Bhaav <span className="font-normal text-muted-fg">भाव</span>
             </span>
           </NavLink>
-          <nav aria-label="Main" className="hidden gap-1 md:flex">
+          <nav aria-label="Main" className="ml-auto hidden items-center gap-1 md:flex">
             {NAV.map((item) => (
               <NavLink
                 key={item.to}
                 to={item.to}
                 end={item.to === '/'}
                 className={({ isActive }) =>
-                  `inline-flex min-h-11 items-center gap-2 rounded-lg px-3 text-sm font-medium transition-colors ${
-                    isActive ? 'bg-muted text-fg' : 'text-muted-fg hover:bg-muted hover:text-fg'
+                  `inline-flex min-h-11 items-center rounded-full px-3.5 text-[13px] tracking-normal transition-colors duration-200 ${
+                    isActive ? 'bg-muted font-semibold text-fg' : 'text-fg/80 hover:text-fg'
                   }`
                 }
               >
-                <item.icon size={18} aria-hidden />
                 {item.label}
               </NavLink>
             ))}
           </nav>
-          <span className="ml-auto">
+          <span className="ml-auto md:ml-2">
             <ServerStatus />
           </span>
         </div>
       </header>
 
-      <main id="main" className="mx-auto max-w-6xl px-4 pb-28 pt-6 sm:pt-8 md:pb-12">
+      <main id="main" className="mx-auto max-w-5xl px-5 pb-32 pt-8 sm:pt-12 md:pb-20">
         {auth.isPending ? (
-          <p className="text-muted-fg">Loading…</p>
+          <p className="flex items-center gap-2 text-muted-fg" role="status">
+            <Spinner />
+            Loading…
+          </p>
         ) : auth.data?.authenticated ? (
           <Suspense fallback={<PageLoading />}>
-            <Outlet />
+            <div key={location.pathname} className="page-enter">
+              <Outlet />
+            </div>
           </Suspense>
         ) : (
           <Gate />
         )}
       </main>
 
-      {/* Phones: the four places live in a bottom bar, within thumb reach. */}
+      {/* Phones: the four places live in a frosted tab bar, within thumb reach. */}
       <nav
         aria-label="Main"
-        className="fixed inset-x-0 bottom-0 z-20 border-t border-border bg-card/95 pb-[env(safe-area-inset-bottom)] backdrop-blur md:hidden"
+        className="glass fixed inset-x-0 bottom-0 z-20 border-t border-border/70 pb-[env(safe-area-inset-bottom)] md:hidden"
       >
         <ul className="mx-auto grid max-w-md grid-cols-4">
           {NAV.map((item) => (
@@ -140,12 +173,12 @@ export function Layout() {
                 to={item.to}
                 end={item.to === '/'}
                 className={({ isActive }) =>
-                  `flex min-h-14 flex-col items-center justify-center gap-0.5 text-xs font-medium ${isActive ? 'text-primary' : 'text-muted-fg'}`
+                  `flex min-h-14 flex-col items-center justify-center gap-0.5 text-[11px] font-medium tracking-normal ${isActive ? 'text-link' : 'text-muted-fg'}`
                 }
               >
                 {({ isActive }) => (
                   <>
-                    <item.icon size={22} weight={isActive ? 'fill' : 'regular'} aria-hidden />
+                    <item.icon size={24} weight={isActive ? 'fill' : 'regular'} aria-hidden />
                     {item.short}
                   </>
                 )}
@@ -167,6 +200,33 @@ function PageLoading() {
   );
 }
 
+/** A full-page message: big title, one line, then what to do. */
+function Message({
+  title,
+  children,
+  actions,
+  role,
+}: {
+  title: ReactNode;
+  children: ReactNode;
+  actions?: ReactNode;
+  role?: 'alert';
+}) {
+  return (
+    <div
+      className="mx-auto mt-10 flex max-w-lg flex-col items-center gap-3 text-center sm:mt-20"
+      role={role}
+    >
+      <h1 className="text-[34px] font-bold leading-tight sm:text-[40px]">{title}</h1>
+      <p className="text-[19px] text-muted-fg">{children}</p>
+      <div className="mt-3 flex flex-wrap items-center justify-center gap-x-6 gap-y-2">
+        {actions}
+        <MoreLink to="/">Go to the home page</MoreLink>
+      </div>
+    </div>
+  );
+}
+
 /** After a deploy, an open tab asks for page files that no longer exist; a reload fetches the new ones. */
 const STALE_BUILD =
   /dynamically imported module|Importing a module script failed|error loading dynamically imported|Failed to fetch/i;
@@ -176,42 +236,49 @@ export function RouteError() {
   const message = error instanceof Error ? error.message : String(error ?? '');
   const stale = STALE_BUILD.test(message);
   return (
-    <div
-      className="mx-auto mt-8 flex max-w-md flex-col items-center gap-3 text-center"
+    <Message
       role="alert"
+      title={stale ? 'Bhaav was updated' : 'This page hit a problem'}
+      actions={
+        <Button variant="primary" icon={ArrowClockwise} onClick={() => window.location.reload()}>
+          Reload the page
+        </Button>
+      }
     >
-      <h1 className="text-2xl font-semibold">
-        {stale ? 'Bhaav was updated' : 'This page hit a problem'}
-      </h1>
-      <p className="text-muted-fg">
-        {stale
-          ? 'Reload to get the new version. Your orders are saved.'
-          : 'Reload to try again. Your orders are saved.'}
-      </p>
-      <Button variant="primary" icon={ArrowClockwise} onClick={() => window.location.reload()}>
-        Reload the page
-      </Button>
-      <NavLink
-        to="/"
-        className="inline-flex min-h-11 items-center font-medium text-link underline-offset-4 hover:underline"
-      >
-        Go to the home page
-      </NavLink>
-    </div>
+      {stale
+        ? 'Reload to get the new version. Your orders are saved.'
+        : 'Reload to try again. Your orders are saved.'}
+    </Message>
   );
 }
 
 export function NotFound() {
+  useDocumentTitle('Page not found');
   return (
-    <div className="mx-auto mt-8 max-w-md text-center">
-      <h1 className="text-2xl font-semibold">This page does not exist</h1>
-      <p className="mt-2 text-muted-fg">The link may be old. Start from the home page.</p>
-      <NavLink
-        to="/"
-        className="mt-4 inline-flex min-h-11 items-center font-medium text-link underline-offset-4 hover:underline"
-      >
-        Go to the home page
-      </NavLink>
-    </div>
+    <Message title="This page does not exist">
+      The link may be old. Start from the home page.
+    </Message>
+  );
+}
+
+/** An order page that can't show its order: gone (a wrong link) or not loaded (try again). */
+export function OrderUnavailable({ error, retry }: { error: Error | null; retry: () => void }) {
+  const missing = error instanceof ApiError && error.status === 404;
+  useDocumentTitle(missing ? 'Order not found' : 'Order not loaded');
+  return (
+    <Message
+      title={missing ? 'This order does not exist' : 'The order did not load'}
+      actions={
+        missing ? undefined : (
+          <Button variant="primary" onClick={retry}>
+            Try again
+          </Button>
+        )
+      }
+    >
+      {missing
+        ? 'The link may be mistyped, or from another copy of Bhaav. Start a new order from the home page.'
+        : (error?.message ?? 'Check the connection and try again.')}
+    </Message>
   );
 }

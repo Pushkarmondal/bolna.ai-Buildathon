@@ -60,6 +60,14 @@ export function normalizeDate(value: string | null | undefined): string | null {
   return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === iso ? iso : null;
 }
 
+/** Today's date in India as YYYY-MM-DD; the buyers and suppliers are all on IST. */
+export function indiaToday(now = Date.now()): string {
+  return new Date(now + 330 * 60_000).toISOString().slice(0, 10);
+}
+
+/** True when a YYYY-MM-DD delivery date is before today in India. */
+export const isPastDate = (iso: string, now = Date.now()) => iso < indiaToday(now);
+
 /** "Friday, 23 October" for prompts and screens. */
 export function dateWords(iso: string | null): string {
   if (!iso) return 'as soon as possible';
@@ -102,6 +110,7 @@ export function missingFor(r: RequestRow, callableSuppliers: number): string[] {
   if (r.quantity == null) missing.push('how much');
   if (!r.unit) missing.push('the unit (kilo, litre, piece…)');
   if (!r.deliverBy) missing.push('the delivery date');
+  else if (isPastDate(r.deliverBy)) missing.push('a delivery date from today on');
   if (callableSuppliers === 0) missing.push('at least one supplier');
   return missing;
 }
@@ -147,20 +156,31 @@ export async function orderView(db: Db, requestId: string): Promise<OrderView | 
     // Rows are oldest first, so the last one per supplier is their newest quote.
     const latest = new Map<string, QuoteRow>();
     for (const q of quoteRows) latest.set(q.supplierId, q);
+    const rank = (r: RankedQuote) => (r.perUnit === null ? 2 : r.reasons.length > 0 ? 1 : 0);
     ranking = [...latest.values()]
       .map((q) => {
         const landed = landedPrice(toTerms(q), order);
         return {
-          quoteId: q.id,
-          supplierId: q.supplierId,
-          perUnit: landed.perUnit,
-          reasons: landed.reasons,
+          entry: {
+            quoteId: q.id,
+            supplierId: q.supplierId,
+            perUnit: landed.perUnit,
+            reasons: landed.reasons,
+          },
+          delivery: q.deliveryDate ?? order.deliverBy,
+          at: q.createdAt.getTime(),
         };
       })
-      .sort((a, b) => {
-        const rank = (r: RankedQuote) => (r.perUnit === null ? 2 : r.reasons.length > 0 ? 1 : 0);
-        return rank(a) - rank(b) || (a.perUnit ?? 0) - (b.perUnit ?? 0);
-      });
+      // The same order as bestOffer (engine.ts), so "Best" here is the offer Bhaav bargained
+      // with: cheapest, then the earlier delivery, then whoever quoted that price first.
+      .sort(
+        (a, b) =>
+          rank(a.entry) - rank(b.entry) ||
+          (a.entry.perUnit ?? 0) - (b.entry.perUnit ?? 0) ||
+          a.delivery.localeCompare(b.delivery) ||
+          a.at - b.at,
+      )
+      .map((r) => r.entry);
     // Every quote ever heard counts here, including ones bargained down since.
     for (const q of quoteRows) {
       const perUnit = landedPrice(toTerms(q), order).perUnit;

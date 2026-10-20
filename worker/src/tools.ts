@@ -9,7 +9,8 @@ import type { Db } from './db/context';
 import { calls, events, quotes, requests, suppliers } from './db/schema';
 import { landedPrice } from './engine';
 import { newId } from './ids';
-import { normalizeDate, normalizeUnit, orderOf } from './orders';
+import { parseAmount } from './numbers';
+import { isPastDate, normalizeDate, normalizeUnit, orderOf } from './orders';
 
 export type Params = Record<string, unknown>;
 
@@ -25,9 +26,7 @@ export function param(params: Params, name: string): string | undefined {
 
 export function numberParam(params: Params, name: string): number | undefined {
   const value = param(params, name);
-  if (value === undefined) return undefined;
-  const n = Number(value.replace(/[₹,\s]/g, ''));
-  return Number.isFinite(n) ? n : undefined;
+  return value === undefined ? undefined : parseAmount(value);
 }
 
 export interface ToolResult {
@@ -74,8 +73,9 @@ export async function updateOrder(db: Db, params: Params): Promise<ToolResult> {
   const dateWord = param(params, 'deliver_by');
   if (dateWord) {
     const date = normalizeDate(dateWord);
-    if (date) patch.deliverBy = date;
-    else problems.push('send the delivery date as YYYY-MM-DD');
+    if (!date) problems.push('send the delivery date as YYYY-MM-DD');
+    else if (isPastDate(date)) problems.push('that delivery date has passed; ask for a later one');
+    else patch.deliverBy = date;
   }
 
   if (Object.keys(patch).length > 0)
@@ -183,7 +183,7 @@ export async function startOrder(
   callerAgentId: string,
 ): Promise<ToolResult> {
   const request = await db.select().from(requests).where(eq(requests.id, requestId)).get();
-  if (!request) return { ok: false, message: 'This order does not exist.' };
+  if (!request) return { ok: false, notFound: true, message: 'This order does not exist.' };
   if (request.status !== 'draft') return { ok: true, message: 'Calls have already started.' };
 
   const list = await db
@@ -196,6 +196,7 @@ export async function startOrder(
   if (request.quantity == null) missing.push('how much');
   if (!request.unit) missing.push('the unit');
   if (!request.deliverBy) missing.push('the delivery date');
+  else if (isPastDate(request.deliverBy)) missing.push('a delivery date from today on');
   if (list.length === 0) missing.push('at least one supplier on the screen');
   if (missing.length)
     return { ok: false, message: `Not started. Still needed: ${missing.join(', ')}.`, missing };

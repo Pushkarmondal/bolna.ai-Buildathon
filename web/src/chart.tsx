@@ -83,6 +83,7 @@ export function PriceChart({
               y1={y(t)}
               y2={y(t)}
               stroke="var(--border)"
+              strokeDasharray="2 4"
               strokeWidth="1"
             />
             <text
@@ -100,7 +101,7 @@ export function PriceChart({
         <path
           d={path}
           fill="none"
-          stroke="var(--primary)"
+          stroke="var(--accent)"
           strokeWidth="2.5"
           strokeLinejoin="round"
           strokeLinecap="round"
@@ -112,7 +113,7 @@ export function PriceChart({
             cy={y(p.perUnit)}
             r="4"
             fill="var(--card)"
-            stroke="var(--primary)"
+            stroke="var(--accent)"
             strokeWidth="2"
           >
             <title>{`${short(p.date)}: ${rupees(p.perUnit)} per ${unit}, ${p.supplierName}`}</title>

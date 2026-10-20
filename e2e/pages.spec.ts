@@ -31,6 +31,37 @@ test('an unknown address shows a way home', async ({ page }) => {
   await expect(page).toHaveURL('/');
 });
 
+test('a missing order says so and offers the way home', async ({ page }) => {
+  await signIn(page);
+  await page.goto('/r/req_doesnotexist/result');
+  await expect(page.getByRole('heading', { name: 'This order does not exist' })).toBeVisible();
+  await expect(page).toHaveTitle('Order not found · Bhaav');
+  await page.getByRole('link', { name: 'Go to the home page' }).click();
+  await expect(page).toHaveURL('/');
+});
+
+test('every page names its browser tab', async ({ page }) => {
+  await signIn(page);
+  for (const [path, title] of [
+    ['/', 'Bhaav — honest supplier calls'],
+    ['/prices', 'Price memory · Bhaav'],
+    ['/play', 'Be the supplier · Bhaav'],
+    ['/bench', 'Test bench · Bhaav'],
+    ['/nope', 'Page not found · Bhaav'],
+  ] as const) {
+    await page.goto(path);
+    await expect(page).toHaveTitle(title);
+  }
+});
+
+test('pages and API answers carry the security headers', async ({ request }) => {
+  for (const path of ['/', '/api/health']) {
+    const res = await request.get(path);
+    expect(res.headers()['x-content-type-options'], path).toBe('nosniff');
+    expect(res.headers()['x-frame-options'], path).toMatch(/DENY|SAMEORIGIN/);
+  }
+});
+
 for (const [name, width, height] of [
   ['phone', 375, 812],
   ['tablet', 768, 1024],

@@ -12,6 +12,13 @@ export class ApiError extends Error {
   }
 }
 
+let signedOut: (() => void) | null = null;
+
+/** Runs when the Worker says the passcode session has ended, so the passcode screen comes back. */
+export function onSignedOut(handler: () => void) {
+  signedOut = handler;
+}
+
 /** Calls the Worker; a non-2xx answer throws its `error` message, ready to show on screen. */
 export async function api<T>(
   path: string,
@@ -25,6 +32,7 @@ export async function api<T>(
   });
   const body: unknown = await res.json().catch(() => null);
   if (!res.ok) {
+    if (res.status === 401 && path !== '/api/auth') signedOut?.();
     const message =
       body && typeof body === 'object' && 'error' in body && typeof body.error === 'string'
         ? body.error
@@ -55,10 +63,14 @@ export function useOrder(id: string) {
     queryKey: ['order', id],
     queryFn: () => api<OrderView>(`/api/requests/${id}`),
     refetchInterval: (query) => {
+      // A missing order or an ended session will not come right by asking again.
+      const error = query.state.error;
+      if (error instanceof ApiError && (error.status === 404 || error.status === 401)) return false;
       const view = query.state.data;
-      // An approved order only changes again while Bhaav is on the confirmation call.
-      if (view?.order.status === 'approved' && !view.calls.some((c) => isLive(c.status)))
-        return false;
+      // A finished or approved order only changes again while Bhaav is on a call (the
+      // confirmation call), or when this screen itself approves, which updates it directly.
+      const settled = view?.order.status === 'done' || view?.order.status === 'approved';
+      if (settled && !view?.calls.some((c) => isLive(c.status))) return false;
       return 2000;
     },
   });

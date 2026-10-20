@@ -250,6 +250,15 @@ describe('catchLies: tool calls', () => {
     expect(JSON.parse(args)).toEqual({ price: 32, unit: 'kg' });
   });
 
+  it('reads a price written as "₹2,250" the same way the save_quote handler does', async () => {
+    const h = harness([saveQuote('{"price": "₹2,250", "unit": "pack"}')]);
+    const reply = await readReply(
+      await catchLies(request('Do hazaar do sau pachaas ka ek tin, delivery free'), h.deps),
+    );
+    expect(reply.finish).toBe('tool_calls');
+    expect(reply.content).toBe('Theek hai ji. ');
+  });
+
   it('asks again instead of saving a price the supplier never said', async () => {
     const h = harness([saveQuote('{"price": 23, "unit": "kg"}')]);
     const reply = await readReply(

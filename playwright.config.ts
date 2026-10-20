@@ -17,6 +17,8 @@ function devVars(): Record<string, string> {
 }
 const vars = devVars();
 process.env.E2E_PASSCODE ??= vars.APP_PASSCODE;
+// The fit check writes worst-case quotes through the tools endpoint, as Bolna would.
+process.env.E2E_TOOL_SECRET ??= vars.TOOL_SECRET;
 
 export default defineConfig({
   testDir: 'e2e',

@@ -6,12 +6,22 @@ import { useEffect, useState } from 'react';
 import { api, type PracticeReview, usePersonas } from '../api';
 import { rupees } from '../format';
 import { ArrowRight, Lightbulb, PhoneDisconnect, ShieldCheck, Storefront, Timer } from '../icons';
-import { Button, ButtonLink, Card, Notice, PageTitle, Pill, VoiceMeter } from '../ui';
+import {
+  Button,
+  ButtonLink,
+  Card,
+  Notice,
+  PageTitle,
+  Pill,
+  useDocumentTitle,
+  VoiceMeter,
+} from '../ui';
 import { useWebCall } from '../webcall';
 
 const LIMIT_SECONDS = 120;
 
 export function PlayPage() {
+  useDocumentTitle('Be the supplier');
   const personas = usePersonas();
   const call = useWebCall();
   const [chosen, setChosen] = useState<Persona | null>(null);
@@ -72,15 +82,15 @@ export function PlayPage() {
             }
           >
             <dl className="grid gap-3 sm:grid-cols-3">
-              <div className="rounded-xl bg-muted p-3">
+              <div className="rounded-2xl bg-bg p-4">
                 <dt className="text-sm text-muted-fg">Your opening</dt>
                 <dd className="font-medium">{chosen.opening}</dd>
               </div>
-              <div className="rounded-xl bg-muted p-3">
+              <div className="rounded-2xl bg-bg p-4">
                 <dt className="text-sm text-muted-fg">Your secret floor</dt>
                 <dd className="font-medium">{chosen.floor}</dd>
               </div>
-              <div className="rounded-xl bg-muted p-3">
+              <div className="rounded-2xl bg-bg p-4">
                 <dt className="text-sm text-muted-fg">Bhaav's real offer</dt>
                 <dd className="tabular font-medium">{chosen.bestOffer}</dd>
               </div>
@@ -116,14 +126,11 @@ export function PlayPage() {
 
       {personas.isPending && <p className="text-muted-fg">Loading suppliers…</p>}
       {personas.error && <Notice tone="danger">{personas.error.message}</Notice>}
-      <ul className="grid gap-4 md:grid-cols-3">
+      <ul className="grid grid-cols-1 gap-4 md:grid-cols-3">
         {personas.data?.map((p) => (
-          <li
-            key={p.id}
-            className="flex flex-col rounded-2xl border border-border bg-card p-4 sm:p-5"
-          >
-            <h2 className="flex items-center gap-2 text-lg font-semibold">
-              <Storefront size={20} weight="duotone" className="text-primary" aria-hidden />
+          <li key={p.id} className="surface flex flex-col p-6">
+            <h2 className="flex items-center gap-2.5 text-[21px] font-semibold leading-tight">
+              <Storefront size={22} className="shrink-0 text-muted-fg" aria-hidden />
               {p.supplierName}
             </h2>
             <p className="mt-1 text-muted-fg">
@@ -194,7 +201,7 @@ function Review({
             {blocked.map((b) => (
               <li
                 key={b.createdAt}
-                className="rounded-xl border border-danger/30 bg-danger-soft px-3 py-2.5 text-sm text-danger"
+                className="rounded-2xl bg-danger-soft px-4 py-3 text-[15px] text-danger"
               >
                 <p className="font-semibold">
                   {b.type === 'blocked'
@@ -222,7 +229,12 @@ function Review({
           </div>
         )}
         {requestId && (
-          <ButtonLink to={`/r/${requestId}`} variant="ghost" className="mt-3" icon={ArrowRight}>
+          <ButtonLink
+            to={`/r/${requestId}`}
+            variant="ghost"
+            className="-ml-5 mt-3"
+            icon={ArrowRight}
+          >
             Open the practice quote book
           </ButtonLink>
         )}

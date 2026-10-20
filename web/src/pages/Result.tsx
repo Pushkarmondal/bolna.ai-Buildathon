@@ -5,6 +5,7 @@ import type { OrderView } from '@bhaav/shared';
 import { useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useParams } from 'react-router';
+import { OrderUnavailable } from '../App';
 import { api, useOrder } from '../api';
 import { PriceChart, trendSentence } from '../chart';
 import { type Choice, choiceOf } from '../choice';
@@ -20,7 +21,17 @@ import {
   WhatsappLogo,
 } from '../icons';
 import { whatsappLink, whatsappSummary } from '../summary';
-import { Button, ButtonLink, Card, EmptyState, Notice, PageTitle, Pill, Stat } from '../ui';
+import {
+  Button,
+  ButtonLink,
+  Card,
+  EmptyState,
+  Notice,
+  PageTitle,
+  Pill,
+  Stat,
+  useDocumentTitle,
+} from '../ui';
 
 const REASONS: Record<string, string> = {
   unit: "priced in a unit that can't be compared",
@@ -35,9 +46,16 @@ export function ResultPage() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
 
+  const o0 = order.data?.order;
+  useDocumentTitle(
+    o0
+      ? `Results: ${[o0.quantity, unitWord(o0.unit), o0.item].filter((x) => x != null && x !== '').join(' ')}`
+      : 'Results',
+  );
+
   if (order.isPending) return <p className="text-muted-fg">Loading the results…</p>;
   if (order.error || !order.data) {
-    return <Notice tone="danger">{order.error?.message ?? 'Could not load the order.'}</Notice>;
+    return <OrderUnavailable error={order.error} retry={() => order.refetch()} />;
   }
   const view = order.data;
   const o = view.order;
@@ -74,7 +92,7 @@ export function ResultPage() {
         title={`${o.quantity ?? ''} ${unit} ${o.item ?? ''}`.trim()}
         sub={`For ${o.buyerName ?? 'you'}, delivered by ${dateLabel(o.deliverBy)}`}
         aside={
-          <ButtonLink to={`/r/${o.id}`} variant="ghost" icon={ArrowLeft}>
+          <ButtonLink to={`/r/${o.id}`} variant="ghost" icon={ArrowLeft} className="-ml-5">
             See the calls
           </ButtonLink>
         }
@@ -114,7 +132,7 @@ export function ResultPage() {
         />
       </div>
 
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
+      <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
         <Card
           title="Every supplier's latest quote"
           icon={Trophy}
@@ -123,7 +141,7 @@ export function ResultPage() {
           {view.ranking.length === 0 ? (
             <EmptyState icon={Trophy} title="No quotes yet" />
           ) : (
-            <ol className="flex flex-col gap-3">
+            <ol className="flex flex-col">
               {view.ranking.map((r, i) => {
                 const q = quote(r.quoteId);
                 const s = supplier(r.supplierId);
@@ -134,7 +152,7 @@ export function ResultPage() {
                 return (
                   <li
                     key={r.quoteId}
-                    className={`rounded-xl border p-4 ${isBest ? 'border-success/40 bg-success-soft/40' : 'border-border'}`}
+                    className="border-t border-border py-5 first:border-t-0 first:pt-0 last:pb-0"
                   >
                     <div className="flex flex-wrap items-start justify-between gap-3">
                       <div className="min-w-0">
@@ -153,7 +171,7 @@ export function ResultPage() {
                           )}
                         </div>
                         <p className="mt-1">
-                          <span className="tabular font-display text-xl font-semibold">
+                          <span className="tabular font-display text-[28px] font-bold tracking-tight">
                             {rupees(r.perUnit)}
                           </span>
                           <span className="text-muted-fg"> per {unit}, delivered</span>
@@ -314,7 +332,7 @@ function ShareCard({ view }: { view: OrderView }) {
 
   return (
     <Card title="Share the results" icon={WhatsappLogo}>
-      <pre className="max-h-56 overflow-auto whitespace-pre-wrap rounded-xl bg-muted p-3 font-sans text-sm text-fg">
+      <pre className="max-h-64 overflow-auto whitespace-pre-wrap rounded-2xl bg-bg p-4 font-sans text-[15px] leading-relaxed text-fg">
         {text}
       </pre>
       <div className="mt-3 flex flex-wrap gap-2">
@@ -325,7 +343,7 @@ function ShareCard({ view }: { view: OrderView }) {
           href={whatsappLink(text)}
           target="_blank"
           rel="noreferrer"
-          className="inline-flex min-h-11 cursor-pointer items-center gap-2 rounded-xl border border-input bg-card px-4 text-sm font-medium text-fg hover:bg-muted"
+          className="inline-flex min-h-11 cursor-pointer items-center gap-2 rounded-full border border-border bg-card px-5 text-[15px] font-medium text-link transition-colors duration-200 hover:bg-muted"
         >
           <WhatsappLogo size={18} weight="bold" aria-hidden />
           Open in WhatsApp

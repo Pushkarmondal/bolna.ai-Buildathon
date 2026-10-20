@@ -14,9 +14,11 @@ export function safeEqual(a: string, b: string): boolean {
   return left.byteLength === right.byteLength && crypto.subtle.timingSafeEqual(left, right);
 }
 
+/** The scheme is case-insensitive ("Bearer", "bearer"); the secret is not. */
 export function bearerMatches(header: string | undefined, secret: string | undefined): boolean {
-  if (!secret || !header?.startsWith('Bearer ')) return false;
-  return safeEqual(header.slice('Bearer '.length), secret);
+  const match = /^bearer\s+(.+)$/i.exec(header?.trim() ?? '');
+  if (!secret || !match?.[1]) return false;
+  return safeEqual(match[1], secret);
 }
 
 /** Middleware: Bolna's own calls must carry the given secret as a Bearer token. */

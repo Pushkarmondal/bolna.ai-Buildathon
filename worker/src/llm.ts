@@ -1,7 +1,7 @@
 // The custom LLM endpoint Bolna calls on every turn. It asks Groq for the reply, then checks each
 // sentence before passing it on: a sentence with a number Bhaav can't back up is never spoken.
 
-import { allowedSet, numbersIn, unbackedNumbers } from './numbers';
+import { allowedSet, numbersIn, parseAmount, unbackedNumbers } from './numbers';
 
 export interface ChatMessage {
   role: string;
@@ -124,8 +124,8 @@ function assembleToolCalls(
 /** A save_quote price must be a number the supplier actually said in their last few messages. */
 function quoteIsBacked(args: string, recent: ReadonlySet<number>): boolean {
   try {
-    const price = Number((JSON.parse(args) as { price?: unknown }).price);
-    return Number.isFinite(price) && recent.has(Math.round(price * 100) / 100);
+    const price = parseAmount((JSON.parse(args) as { price?: unknown }).price);
+    return price !== undefined && recent.has(Math.round(price * 100) / 100);
   } catch {
     return false;
   }

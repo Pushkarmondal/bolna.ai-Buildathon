@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { allowedSet, findNumbers, numbersIn, unbackedNumbers } from '../src/numbers';
+import { allowedSet, findNumbers, numbersIn, parseAmount, unbackedNumbers } from '../src/numbers';
 
 describe('findNumbers: digits', () => {
   it('reads a rupee price and marks it as a price', () => {
@@ -150,5 +150,44 @@ describe('findNumbers: Kannada', () => {
   it('flags an unbacked Kannada price', () => {
     const bad = unbackedNumbers('ಬೇರೆ ಅಂಗಡಿ ಇಪ್ಪತ್ತೆಂಟು ರೂಪಾಯಿ ಹೇಳಿದೆ', allowedSet([31]));
     expect(bad.map((n) => n.value)).toEqual([28]);
+  });
+});
+
+describe('spelling variants', () => {
+  it('reads romanised Hindi with either -is or -ees', () => {
+    expect(numbersIn('chautees rupaye kilo')).toEqual([34]);
+    expect(numbersIn('chautis rupaye kilo')).toEqual([34]);
+    expect(numbersIn('battis ya taintees')).toEqual([32, 33]);
+  });
+
+  it('reads Devanagari written without its nasal or nukta mark', () => {
+    expect(numbersIn('चौतीस रुपये')).toEqual([34]);
+    expect(numbersIn('पैतीस रुपये')).toEqual([35]);
+    expect(numbersIn('अडतीस रुपये')).toEqual([38]);
+    expect(numbersIn('पाच किलो')).toEqual([5]);
+  });
+
+  it('still finds no number in everyday words', () => {
+    expect(numbersIn('Haan ji, boliye, rate kya hai?')).toEqual([]);
+    expect(numbersIn('ek tin ka rate')).toEqual([1]);
+  });
+});
+
+describe('parseAmount', () => {
+  it('reads every way a tool argument carries a rupee amount', () => {
+    expect(parseAmount(34)).toBe(34);
+    expect(parseAmount('34.000000')).toBe(34);
+    expect(parseAmount('₹2,250')).toBe(2250);
+    expect(parseAmount('Rs. 2,250')).toBe(2250);
+    expect(parseAmount('34/-')).toBe(34);
+    expect(parseAmount('-5')).toBe(-5);
+  });
+
+  it('refuses what is not an amount', () => {
+    expect(parseAmount('thirty')).toBeUndefined();
+    expect(parseAmount('%(price)f')).toBeUndefined();
+    expect(parseAmount('')).toBeUndefined();
+    expect(parseAmount(null)).toBeUndefined();
+    expect(parseAmount(Number.NaN)).toBeUndefined();
   });
 });

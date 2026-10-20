@@ -195,6 +195,7 @@ export async function advance(
 
   if ((await callsInLastDay(db)) >= env.maxCallsPerDay) {
     await logEvent(db, requestId, null, 'error', {
+      reason: 'daily_limit',
       message: `Stopped: the daily limit of ${env.maxCallsPerDay} calls is reached (MAX_CALLS_PER_DAY).`,
     });
     await db.update(requests).set({ status: 'done' }).where(eq(requests.id, requestId));
@@ -247,9 +248,9 @@ export async function confirmChoice(
   env: DiallerEnv,
   db: Db,
   requestId: string,
-): Promise<{ ok: boolean; message: string }> {
+): Promise<{ ok: boolean; message: string; notFound?: boolean }> {
   const request = await db.select().from(requests).where(eq(requests.id, requestId)).get();
-  if (!request) return { ok: false, message: 'No such order.' };
+  if (!request) return { ok: false, notFound: true, message: 'No such order.' };
   if (request.status !== 'approved' || !request.approvedQuoteId) {
     return { ok: false, message: 'Approve a quote first.' };
   }

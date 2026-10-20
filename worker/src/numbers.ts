@@ -2,6 +2,23 @@
 // The lie-catcher checks each one against the numbers Bhaav is allowed to say, so this
 // errs towards finding too many numbers rather than too few.
 
+/**
+ * A rupee amount as a tool argument carries it: 34, "34", "34.000000", "₹2,250", "Rs. 2,250" or
+ * "34/-". The save_quote handler and the lie-catcher both read prices with this, so a price one
+ * accepts is never refused by the other.
+ */
+export function parseAmount(value: unknown): number | undefined {
+  if (typeof value === 'number') return Number.isFinite(value) ? value : undefined;
+  if (typeof value !== 'string') return undefined;
+  const cleaned = value
+    .trim()
+    .replace(/^(₹|rs\.?|inr)\s*/i, '')
+    .replace(/\/-$/, '')
+    .replace(/[,\s]/g, '');
+  if (!/^-?\d+(\.\d+)?$/.test(cleaned)) return undefined;
+  return Number(cleaned);
+}
+
 export interface FoundNumber {
   value: number;
   /** The digits or words as written. */
@@ -148,10 +165,37 @@ const QUANTITY_WORDS = new Set(
     .map((w) => w.normalize('NFC')),
 );
 
+/** Devanagari nasal and nukta marks that speech-to-text often leaves out: चौंतीस is also चौतीस. */
+const OPTIONAL_MARKS = /[\u0901\u0902\u093C]/g;
+
+/**
+ * Other ways the same word gets written. Romanised Hindi swaps "-is" and "-ees" freely
+ * (chautis, chautees); Devanagari may drop its nasal or nukta marks.
+ */
+function variantsOf(word: string): string[] {
+  const out = [word];
+  if (/^[a-z]+$/.test(word)) {
+    if (word.endsWith('ees')) out.push(`${word.slice(0, -3)}is`);
+    else if (word.endsWith('is')) out.push(`${word.slice(0, -2)}ees`);
+  } else {
+    const bare = word.replace(OPTIONAL_MARKS, '');
+    if (bare !== word && bare.length > 1) out.push(bare);
+  }
+  return out;
+}
+
 function spellingMap(entries: Array<[number, string]>): Map<string, number> {
   const map = new Map<string, number>();
+  // Listed spellings first, so a generated variant never takes over a listed word.
   for (const [value, spellings] of entries) {
     for (const word of spellings.split(' ')) map.set(word.normalize('NFC'), value);
+  }
+  for (const [value, spellings] of entries) {
+    for (const word of spellings.split(' ')) {
+      for (const variant of variantsOf(word.normalize('NFC'))) {
+        if (!map.has(variant)) map.set(variant, value);
+      }
+    }
   }
   return map;
 }

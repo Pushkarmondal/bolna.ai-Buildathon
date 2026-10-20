@@ -3,7 +3,7 @@
 import type { BenchResults, BenchRun } from '@bhaav/shared';
 import data from '../bench-results.json';
 import { CaretDown, Flask } from '../icons';
-import { Card, EmptyState, PageTitle, Pill, Stat } from '../ui';
+import { Card, EmptyState, PageTitle, Pill, Stat, useDocumentTitle } from '../ui';
 
 const results = data as BenchResults;
 
@@ -12,6 +12,7 @@ function pct(n: number, d: number) {
 }
 
 export function BenchPage() {
+  useDocumentTitle('Test bench');
   const runs = results.runs.filter((r) => !r.error);
   const failed = results.runs.length - runs.length;
   const unbacked = runs.reduce((n, r) => n + r.unbacked.length, 0);
@@ -34,7 +35,7 @@ export function BenchPage() {
         </EmptyState>
       ) : (
         <>
-          <div className="mb-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="mb-4 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
             <Stat
               label="Unbacked numbers spoken"
               value={String(unbacked)}
@@ -105,7 +106,7 @@ function RunRow({ run }: { run: BenchRun }) {
             )}
           </span>
         </summary>
-        <ol className="mb-2 flex flex-col gap-1.5 rounded-xl bg-muted p-3 text-sm">
+        <ol className="mb-3 flex flex-col gap-2 rounded-2xl bg-bg p-4 text-[15px]">
           {run.error && <li className="text-danger">{run.error}</li>}
           {run.turns.map((t, i) => (
             // biome-ignore lint/suspicious/noArrayIndexKey: a transcript's turns never reorder

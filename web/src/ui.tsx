@@ -1,7 +1,8 @@
-// Shared building blocks. Every control is at least 44px tall, every status carries words as well
-// as colour, and every input has a visible label with its hint or error linked by aria-describedby.
+// Shared building blocks, in an Apple-style system: white cards on a grey page, pill buttons, one
+// blue for actions. Every control is at least 44px tall, every status carries words as well as
+// colour, and every input has a visible label with its hint or error linked by aria-describedby.
 
-import type { ButtonHTMLAttributes, ReactNode } from 'react';
+import { type ButtonHTMLAttributes, type ReactNode, useEffect } from 'react';
 import { Link, type LinkProps } from 'react-router';
 import { CheckCircle, type Icon, Info, WarningCircle, XCircle } from './icons';
 
@@ -19,13 +20,13 @@ export function Card({
   icon?: Icon;
 }) {
   return (
-    <section className={`rounded-2xl border border-border bg-card p-4 sm:p-5 ${className}`}>
+    <section className={`surface min-w-0 p-5 sm:p-6 ${className}`}>
       {(title || aside) && (
-        <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
           {title && (
-            <h2 className="flex items-center gap-2 text-lg font-semibold text-fg">
+            <h2 className="flex items-center gap-2.5 text-[21px] font-semibold leading-tight text-fg">
               {IconComponent && (
-                <IconComponent size={20} weight="duotone" className="text-primary" aria-hidden />
+                <IconComponent size={22} className="shrink-0 text-muted-fg" aria-hidden />
               )}
               {title}
             </h2>
@@ -41,7 +42,7 @@ export function Card({
 export type Tone = 'neutral' | 'success' | 'warn' | 'danger' | 'info';
 
 const PILL: Record<Tone, string> = {
-  neutral: 'bg-muted text-muted-fg',
+  neutral: 'bg-muted text-fg',
   success: 'bg-success-soft text-success',
   warn: 'bg-warn-soft text-warn',
   danger: 'bg-danger-soft text-danger',
@@ -61,7 +62,7 @@ export function Pill({
 }) {
   return (
     <span
-      className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 py-1 text-xs font-medium ${PILL[tone]}`}
+      className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 py-1 text-xs font-semibold tracking-normal ${PILL[tone]}`}
     >
       {pulse && (
         <span className="size-1.5 rounded-full bg-current motion-safe:animate-pulse" aria-hidden />
@@ -72,19 +73,22 @@ export function Pill({
   );
 }
 
-type Variant = 'cta' | 'primary' | 'secondary' | 'ghost' | 'danger';
+type Variant = 'cta' | 'primary' | 'secondary' | 'ghost' | 'ghost-danger' | 'danger';
 
+// Apple's buttons: a filled blue pill for the action, a quiet outlined pill beside it.
 const BUTTON: Record<Variant, string> = {
-  cta: 'bg-accent text-on-accent hover:brightness-110',
-  primary: 'bg-primary text-on-primary hover:brightness-110',
-  secondary: 'border border-input bg-card text-fg hover:bg-muted',
-  ghost: 'text-fg hover:bg-muted',
-  danger: 'bg-danger-soft text-danger border border-danger/40 hover:brightness-95',
+  cta: 'bg-accent text-on-accent hover:brightness-110 active:brightness-95',
+  primary: 'bg-accent text-on-accent hover:brightness-110 active:brightness-95',
+  secondary: 'border border-border bg-card text-link hover:bg-muted',
+  ghost: 'text-link hover:bg-muted',
+  // A row's destructive action (Remove): red text, as Apple marks destructive actions.
+  'ghost-danger': 'text-danger hover:bg-danger-soft',
+  danger: 'bg-danger-soft text-danger hover:brightness-95',
 };
 
 const buttonClass = (variant: Variant, size: 'md' | 'lg', extra = '') =>
-  `inline-flex cursor-pointer items-center justify-center gap-2 rounded-xl font-medium transition-[filter,background-color] duration-200 ${
-    size === 'lg' ? 'min-h-12 px-5 text-base' : 'min-h-11 px-4 text-sm'
+  `inline-flex cursor-pointer items-center justify-center gap-2 rounded-full font-medium tracking-normal transition-[filter,background-color,transform] duration-200 ease-apple active:scale-[0.98] ${
+    size === 'lg' ? 'min-h-12 px-7 text-[17px]' : 'min-h-11 px-5 text-[15px]'
   } ${BUTTON[variant]} ${extra}`;
 
 export function Spinner() {
@@ -122,7 +126,7 @@ export function Button({
       onClick={busy ? undefined : onClick}
       {...rest}
     >
-      {busy ? <Spinner /> : IconComponent && <IconComponent size={18} weight="bold" aria-hidden />}
+      {busy ? <Spinner /> : IconComponent && <IconComponent size={18} aria-hidden />}
       {children}
     </button>
   );
@@ -138,14 +142,32 @@ export function ButtonLink({
 }: LinkProps & { variant?: Variant; size?: 'md' | 'lg'; icon?: Icon }) {
   return (
     <Link className={buttonClass(variant, size, className)} {...rest}>
-      {IconComponent && <IconComponent size={18} weight="bold" aria-hidden />}
+      {IconComponent && <IconComponent size={18} aria-hidden />}
       {children}
     </Link>
   );
 }
 
+/** A text link in Apple's style: blue, with a trailing chevron that nudges on hover. */
+export function MoreLink({ children, ...rest }: LinkProps) {
+  return (
+    <Link
+      className="group inline-flex min-h-11 items-center gap-1 text-[17px] text-link hover:underline"
+      {...rest}
+    >
+      {children}
+      <span
+        className="transition-transform duration-200 ease-apple group-hover:translate-x-0.5"
+        aria-hidden
+      >
+        ›
+      </span>
+    </Link>
+  );
+}
+
 export const inputClass =
-  'block min-h-11 w-full min-w-0 rounded-xl border border-input bg-card px-3 py-2 text-base text-fg placeholder:text-muted-fg aria-[invalid=true]:border-danger';
+  'block min-h-11 w-full min-w-0 rounded-xl border border-input bg-card px-3.5 py-2 text-[17px] text-fg placeholder:text-muted-fg transition-shadow duration-200 focus:border-accent focus:outline-none focus:ring-4 focus:ring-accent/20 aria-[invalid=true]:border-danger';
 
 /** Props that link an input to its label, hint and error. */
 export function fieldProps(
@@ -179,9 +201,9 @@ export function Field({
 }) {
   return (
     <div className="flex min-w-0 flex-col gap-1.5">
-      <label htmlFor={id} className="text-sm font-medium text-fg">
+      <label htmlFor={id} className="text-sm font-semibold text-fg">
         {label}
-        {required && <span className="text-muted-fg"> (required)</span>}
+        {required && <span className="font-normal text-muted-fg"> (required)</span>}
       </label>
       {children}
       {hint && (
@@ -191,7 +213,7 @@ export function Field({
       )}
       {error && (
         <p id={`${id}-error`} className="flex items-start gap-1.5 text-sm text-danger" role="alert">
-          <WarningCircle size={18} weight="bold" className="mt-0.5 shrink-0" aria-hidden />
+          <WarningCircle size={18} weight="bold" className="mt-px shrink-0" aria-hidden />
           {error}
         </p>
       )}
@@ -200,10 +222,10 @@ export function Field({
 }
 
 const NOTICE: Record<Exclude<Tone, 'neutral'>, { box: string; icon: Icon }> = {
-  info: { box: 'border-info/30 bg-info-soft text-info', icon: Info },
-  warn: { box: 'border-warn/30 bg-warn-soft text-warn', icon: WarningCircle },
-  danger: { box: 'border-danger/30 bg-danger-soft text-danger', icon: XCircle },
-  success: { box: 'border-success/30 bg-success-soft text-success', icon: CheckCircle },
+  info: { box: 'bg-info-soft text-info', icon: Info },
+  warn: { box: 'bg-warn-soft text-warn', icon: WarningCircle },
+  danger: { box: 'bg-danger-soft text-danger', icon: XCircle },
+  success: { box: 'bg-success-soft text-success', icon: CheckCircle },
 };
 
 /** A message in a tinted box. Errors are announced (role="alert"); others are polite status. */
@@ -219,10 +241,10 @@ export function Notice({
   const { box, icon: IconComponent } = NOTICE[tone];
   return (
     <div
-      className={`flex gap-3 rounded-xl border px-4 py-3 text-sm ${box}`}
+      className={`flex gap-3 rounded-2xl px-4 py-3.5 text-[15px] ${box}`}
       role={tone === 'danger' ? 'alert' : 'status'}
     >
-      <IconComponent size={20} weight="bold" className="mt-0.5 shrink-0" aria-hidden />
+      <IconComponent size={20} weight="fill" className="mt-0.5 shrink-0" aria-hidden />
       <div className="min-w-0 [overflow-wrap:anywhere]">
         {title && <p className="font-semibold">{title}</p>}
         {children}
@@ -243,7 +265,7 @@ export function VoiceMeter({
   return (
     // biome-ignore lint/a11y/useSemanticElements: a styled level bar; a native <meter> can't be styled the same in every browser
     <div
-      className="h-2 w-full overflow-hidden rounded-full bg-muted"
+      className="h-1.5 w-full overflow-hidden rounded-full bg-muted"
       role="meter"
       aria-label={label}
       aria-valuemin={0}
@@ -258,6 +280,7 @@ export function VoiceMeter({
   );
 }
 
+/** The page's headline: a quiet eyebrow, a big tight title, and one line of context. */
 export function PageTitle({
   eyebrow,
   title,
@@ -270,11 +293,11 @@ export function PageTitle({
   aside?: ReactNode;
 }) {
   return (
-    <div className="mb-6 flex flex-wrap items-start justify-between gap-3">
-      <div className="min-w-0 max-w-2xl">
-        {eyebrow && <p className="mb-1 text-sm font-medium text-primary">{eyebrow}</p>}
-        <h1 className="text-2xl font-semibold tracking-tight text-fg sm:text-3xl">{title}</h1>
-        {sub && <p className="mt-2 text-base text-muted-fg">{sub}</p>}
+    <div className="mb-8 flex flex-wrap items-end justify-between gap-4 sm:mb-10">
+      <div className="min-w-0 max-w-3xl">
+        {eyebrow && <p className="mb-1.5 text-[17px] font-semibold text-muted-fg">{eyebrow}</p>}
+        <h1 className="text-[34px] font-bold leading-[1.08] text-fg sm:text-[48px]">{title}</h1>
+        {sub && <p className="mt-3 text-[19px] leading-snug text-muted-fg sm:text-[21px]">{sub}</p>}
       </div>
       {aside}
     </div>
@@ -293,14 +316,14 @@ export function Stat({
   tone?: 'success';
 }) {
   return (
-    <div className="rounded-2xl border border-border bg-card p-4">
+    <div className="surface min-w-0 p-5 sm:p-6">
       <p className="text-sm text-muted-fg">{label}</p>
       <p
-        className={`tabular mt-1 font-display text-2xl font-semibold ${tone === 'success' ? 'text-success' : 'text-fg'}`}
+        className={`tabular mt-1 font-display text-[34px] font-bold leading-tight tracking-tight sm:text-[40px] ${tone === 'success' ? 'text-success' : 'text-fg'}`}
       >
         {value}
       </p>
-      {note && <p className="mt-0.5 text-sm text-muted-fg">{note}</p>}
+      {note && <p className="mt-1 text-sm text-muted-fg">{note}</p>}
     </div>
   );
 }
@@ -315,10 +338,10 @@ export function EmptyState({
   children?: ReactNode;
 }) {
   return (
-    <div className="flex flex-col items-center gap-2 rounded-xl border border-dashed border-border px-4 py-8 text-center">
-      <IconComponent size={28} weight="duotone" className="text-muted-fg" aria-hidden />
-      <p className="font-medium text-fg">{title}</p>
-      {children && <div className="text-sm text-muted-fg">{children}</div>}
+    <div className="flex flex-col items-center gap-2 rounded-2xl bg-muted/60 px-4 py-10 text-center">
+      <IconComponent size={32} weight="light" className="text-muted-fg" aria-hidden />
+      <p className="text-[17px] font-semibold text-fg">{title}</p>
+      {children && <div className="max-w-sm text-[15px] text-muted-fg">{children}</div>}
     </div>
   );
 }
@@ -326,11 +349,11 @@ export function EmptyState({
 /** Where the buyer is in the draft order: what's done, what's next. */
 export function Steps({ steps }: { steps: Array<{ label: string; done: boolean }> }) {
   return (
-    <ol className="mb-6 flex flex-wrap gap-2" aria-label="Order progress">
+    <ol className="-mt-4 mb-8 flex flex-wrap gap-2" aria-label="Order progress">
       {steps.map((s, i) => (
         <li
           key={s.label}
-          className={`inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-sm ${s.done ? 'bg-success-soft text-success' : 'bg-muted text-muted-fg'}`}
+          className={`inline-flex items-center gap-2 rounded-full px-3.5 py-1.5 text-sm font-medium tracking-normal ${s.done ? 'bg-success-soft text-success' : 'bg-muted text-fg'}`}
         >
           {s.done ? (
             <CheckCircle size={16} weight="fill" aria-hidden />
@@ -347,4 +370,11 @@ export function Steps({ steps }: { steps: Array<{ label: string; done: boolean }
       ))}
     </ol>
   );
+}
+
+/** Names the browser tab and history entry after the page: "Price memory · Bhaav". */
+export function useDocumentTitle(title: string) {
+  useEffect(() => {
+    document.title = title ? `${title} · Bhaav` : 'Bhaav — honest supplier calls';
+  }, [title]);
 }

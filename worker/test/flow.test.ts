@@ -6,10 +6,14 @@ import { eq } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/d1';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { allowedNumbersFor } from '../src/db/context';
-import { calls, events } from '../src/db/schema';
+import { calls, events, requests } from '../src/db/schema';
 import worker, { sweep } from '../src/index';
 
 const db = drizzle(env.DB);
+
+/** A date n days from today, so no test goes stale when its written date passes. */
+const inDays = (n: number) => new Date(Date.now() + n * 86_400_000).toISOString().slice(0, 10);
+const SOON = inDays(5);
 
 interface FakeBolna {
   placed: Array<{
@@ -103,7 +107,7 @@ async function newOrder(suppliersToAdd = 3): Promise<string> {
       item: 'red onions',
       quantity: 50,
       unit: 'kilo',
-      deliverBy: '2026-10-23',
+      deliverBy: SOON,
       area: 'Indiranagar',
     },
   });
@@ -241,6 +245,74 @@ describe('an order from start to approval', () => {
     expect(bolna.placed).toHaveLength(7);
   });
 
+  it('ranks a tie the way it bargained: the supplier who quoted that price first is Best', async () => {
+    const bolna = fakeBolna();
+    const id = await newOrder(2);
+    await send(`/api/requests/${id}/start`, { method: 'POST' });
+    const quote = async (n: number, price: string) => {
+      await tool('save_quote', {
+        call_ref: bolna.placed[n - 1]?.user_data.call_ref ?? '',
+        price,
+        unit: 'kilo',
+        supplier_words: `${price} rupaye kilo`,
+      });
+      await webhook({ id: bolna.exec(n), status: 'completed' });
+    };
+    await quote(1, '36'); // Supplier 1
+    await quote(2, '34'); // Supplier 2: the best offer
+    // Round 2: Supplier 1 hears Supplier 2's ₹34 and matches it.
+    expect(bolna.placed[2]?.user_data).toMatchObject({ round: '2', best_offer: '₹34 per kilo' });
+    await quote(3, '34');
+
+    const done = await view(id);
+    const supplier = (quoteId: string | null) =>
+      done.suppliers.find((s) => s.id === done.quotes.find((q) => q.id === quoteId)?.supplierId)
+        ?.name;
+    expect(supplier(done.bestQuoteId)).toBe('Supplier 2');
+    expect(supplier(done.ranking[0]?.quoteId ?? null)).toBe('Supplier 2');
+  });
+
+  it('refuses a delivery date that has passed, from the screen, the Desk and at start', async () => {
+    fakeBolna();
+    const id = await newOrder(1);
+    const yesterday = inDays(-1);
+    const patched = await send(`/api/requests/${id}`, {
+      method: 'PATCH',
+      json: { deliverBy: yesterday },
+    });
+    expect(patched.status).toBe(400);
+    expect((await patched.json<{ error: string }>()).error).toMatch(/passed/);
+
+    const desk = await (
+      await tool('update_order', { request_ref: id, deliver_by: yesterday })
+    ).json<{ ok: boolean; message: string }>();
+    expect(desk.ok).toBe(false);
+    expect(desk.message).toMatch(/passed/);
+    expect((await view(id)).order.deliverBy).toBe(SOON);
+
+    // An order saved earlier whose date has since passed cannot start.
+    await db.update(requests).set({ deliverBy: yesterday }).where(eq(requests.id, id));
+    expect((await view(id)).missing).toContain('a delivery date from today on');
+    const start = await send(`/api/requests/${id}/start`, { method: 'POST' });
+    expect(start.status).toBe(409);
+    expect((await start.json<{ missing: string[] }>()).missing).toContain(
+      'a delivery date from today on',
+    );
+  });
+
+  it('answers 404 for an order that does not exist, and JSON for a body that is not', async () => {
+    fakeBolna();
+    expect((await send('/api/requests/req_nope/start', { method: 'POST' })).status).toBe(404);
+    expect((await send('/api/requests/req_nope/confirm', { method: 'POST' })).status).toBe(404);
+    const bad = await send('/api/requests', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: 'not json',
+    });
+    expect(bad.status).toBe(400);
+    expect(await bad.json()).toMatchObject({ error: expect.any(String) });
+  });
+
   it('refuses to start until the order and supplier list are complete', async () => {
     fakeBolna();
     const { id } = await (
@@ -352,6 +424,59 @@ describe('price memory', () => {
     expect(mine?.points.map((p) => p.perUnit)).toEqual([82, 79]);
   });
 
+  it('shows only earlier orders as "last time", never a later one', async () => {
+    const bolna = fakeBolna();
+    const item = `jeera ${crypto.randomUUID().slice(0, 6)}`;
+    const order = async (price: string) => {
+      const id = await newOrder(1);
+      await send(`/api/requests/${id}`, { method: 'PATCH', json: { item } });
+      await send(`/api/requests/${id}/start`, { method: 'POST' });
+      await tool('save_quote', {
+        call_ref: bolna.placed.at(-1)?.user_data.call_ref ?? '',
+        price,
+        unit: 'kilo',
+        supplier_words: `${price} rupaye kilo`,
+      });
+      await webhook({ id: bolna.exec(bolna.placed.length), status: 'completed' });
+      return id;
+    };
+    const first = await order('400');
+    const second = await order('390');
+    expect((await view(first)).history).toEqual([]);
+    expect((await view(second)).history.map((p) => p.requestId)).toEqual([first]);
+  });
+
+  it("uses the same best quote as the results page, not a late one that couldn't win", async () => {
+    const bolna = fakeBolna();
+    const item = `ajwain ${crypto.randomUUID().slice(0, 6)}`;
+    const id = await newOrder(2);
+    await send(`/api/requests/${id}`, { method: 'PATCH', json: { item } });
+    await send(`/api/requests/${id}/start`, { method: 'POST' });
+    // Supplier 1 is cheaper but delivers after the order's date, so it cannot win.
+    await tool('save_quote', {
+      call_ref: bolna.placed[0]?.user_data.call_ref ?? '',
+      price: '200',
+      unit: 'kilo',
+      supplier_words: '200 rupaye kilo',
+      delivery_date: inDays(30),
+    });
+    await webhook({ id: bolna.exec(1), status: 'completed' });
+    await tool('save_quote', {
+      call_ref: bolna.placed[1]?.user_data.call_ref ?? '',
+      price: '240',
+      unit: 'kilo',
+      supplier_words: '240 rupaye kilo',
+    });
+    await webhook({ id: bolna.exec(2), status: 'completed' });
+
+    const done = await view(id);
+    expect(done.quotes.find((q) => q.id === done.bestQuoteId)?.price).toBe(240);
+    const series = await (await send('/api/prices')).json<
+      Array<{ item: string; points: Array<{ perUnit: number }> }>
+    >();
+    expect(series.find((s) => s.item === item)?.points.map((p) => p.perUnit)).toEqual([240]);
+  });
+
   it('never counts practice orders', async () => {
     fakeBolna();
     const res = await send('/api/web-session', {
@@ -372,7 +497,7 @@ describe('languages', () => {
     ).json<{ id: string }>();
     await send(`/api/requests/${id}`, {
       method: 'PATCH',
-      json: { item: 'tomatoes', quantity: 20, unit: 'kg', deliverBy: '2026-10-23' },
+      json: { item: 'tomatoes', quantity: 20, unit: 'kg', deliverBy: SOON },
     });
     const phone = `9${String(Date.now()).slice(-9)}`;
     const added = await send(`/api/requests/${id}/suppliers`, {
@@ -397,7 +522,7 @@ describe('Bolna tools', () => {
       quantity: '60.000000',
       unit: 'litres',
       quality: '%(quality)s',
-      deliver_by: '2026-10-24',
+      deliver_by: SOON,
       area: 'None',
     });
     const body = await res.json<{ ok: boolean; message: string }>();
@@ -407,7 +532,7 @@ describe('Bolna tools', () => {
       item: 'cooking oil',
       quantity: 60,
       unit: 'litre',
-      deliverBy: '2026-10-24',
+      deliverBy: SOON,
       quality: null,
       area: null,
     });
@@ -424,6 +549,21 @@ describe('Bolna tools', () => {
     expect(body.ok).toBe(false);
     expect(body.message).toMatch(/handful/);
     expect(body.message).toMatch(/YYYY-MM-DD/);
+  });
+
+  it('accepts the Bearer scheme in any case, but never a wrong secret', async () => {
+    const lower = await send('/tools/save_quote', {
+      method: 'POST',
+      headers: { authorization: 'bearer test-tool-secret' },
+      json: { call_ref: 'call_unknown' },
+    });
+    expect(lower.status).toBe(200);
+    const wrong = await send('/tools/save_quote', {
+      method: 'POST',
+      headers: { authorization: 'Bearer test-tool-secreT' },
+      json: { call_ref: 'call_unknown' },
+    });
+    expect(wrong.status).toBe(401);
   });
 
   it('refuses a tool call without the secret', async () => {

@@ -6,7 +6,7 @@ import { usePrices } from '../api';
 import { PriceChart, trendSentence } from '../chart';
 import { rupees, unitWord } from '../format';
 import { ChartLineUp } from '../icons';
-import { ButtonLink, Card, EmptyState, Notice, PageTitle } from '../ui';
+import { ButtonLink, Card, EmptyState, Notice, PageTitle, useDocumentTitle } from '../ui';
 
 const day = (ms: number) =>
   new Intl.DateTimeFormat('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }).format(
@@ -14,6 +14,7 @@ const day = (ms: number) =>
   );
 
 export function PricesPage() {
+  useDocumentTitle('Price memory');
   const prices = usePrices();
   return (
     <>
@@ -55,15 +56,15 @@ function ItemCard({ series }: { series: PriceSeries }) {
         <PriceChart points={series.points} unit={unit} label={sentence} />
       ) : (
         <dl className="grid grid-cols-2 gap-3">
-          <div className="rounded-xl bg-muted p-3">
+          <div className="rounded-2xl bg-bg p-4">
             <dt className="text-sm text-muted-fg">Latest best</dt>
-            <dd className="tabular font-display text-xl font-semibold">
+            <dd className="tabular mt-1 font-display text-[28px] font-bold leading-tight tracking-tight">
               {rupees(last?.perUnit)} / {unit}
             </dd>
           </div>
-          <div className="rounded-xl bg-muted p-3">
+          <div className="rounded-2xl bg-bg p-4">
             <dt className="text-sm text-muted-fg">Lowest seen</dt>
-            <dd className="tabular font-display text-xl font-semibold">
+            <dd className="tabular mt-1 font-display text-[28px] font-bold leading-tight tracking-tight">
               {rupees(lowest)} / {unit}
             </dd>
           </div>

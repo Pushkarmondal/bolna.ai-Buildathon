@@ -7,6 +7,8 @@ import { zValidator } from '@hono/zod-validator';
 import { and, eq } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/d1';
 import { type Context, Hono } from 'hono';
+import { HTTPException } from 'hono/http-exception';
+import { secureHeaders } from 'hono/secure-headers';
 import { z } from 'zod';
 import {
   endSession,
@@ -32,7 +34,7 @@ import {
 } from './dialler';
 import { newId } from './ids';
 import { type ChatRequest, catchLies } from './llm';
-import { normalizeDate, normalizePhone, normalizeUnit, orderView } from './orders';
+import { isPastDate, normalizeDate, normalizePhone, normalizeUnit, orderView } from './orders';
 import {
   createPractice,
   PERSONAS,
@@ -61,6 +63,17 @@ const json = <T extends z.ZodType>(schema: T) =>
   });
 
 const app = new Hono<Env>();
+
+// The pages get the same headers from web/public/_headers. Bolna's server-to-server calls ignore them.
+app.use('*', secureHeaders({ crossOriginResourcePolicy: 'same-origin' }));
+
+// Every error answers in JSON, so the screens can always show a sentence (malformed JSON included).
+app.onError((error, c) => {
+  if (error instanceof HTTPException)
+    return c.json({ error: error.message || 'That request could not be read.' }, error.status);
+  console.error(error);
+  return c.json({ error: 'Something went wrong on our side. Please try again.' }, 500);
+});
 
 app.get('/api/health', (c) => c.json({ ok: true }));
 
@@ -153,6 +166,8 @@ api.patch(
       const date = body.deliverBy === null ? null : normalizeDate(body.deliverBy);
       if (body.deliverBy !== null && !date)
         return c.json({ error: 'Give the delivery date as YYYY-MM-DD.' }, 400);
+      if (date && isPastDate(date))
+        return c.json({ error: 'That date has passed. Pick today or a later date.' }, 400);
       patch.deliverBy = date;
     }
     if (Object.keys(patch).length > 0)
@@ -228,7 +243,11 @@ api.post('/requests/:id/start', async (c) => {
   const db = dbOf(c);
   const id = c.req.param('id');
   const result = await startOrder(db, id, c.env.BOLNA_CALLER_AGENT_ID);
-  if (!result.ok) return c.json({ error: result.message, missing: result.missing ?? [] }, 409);
+  if (!result.ok)
+    return c.json(
+      { error: result.message, missing: result.missing ?? [] },
+      result.notFound ? 404 : 409,
+    );
   const step = await advance(diallerEnv(c.env), db, id);
   return c.json({ step, view: await orderView(db, id) });
 });
@@ -258,7 +277,7 @@ api.post('/requests/:id/confirm', async (c) => {
   const db = dbOf(c);
   const id = c.req.param('id');
   const result = await confirmChoice(diallerEnv(c.env), db, id);
-  if (!result.ok) return c.json({ error: result.message }, 409);
+  if (!result.ok) return c.json({ error: result.message }, result.notFound ? 404 : 409);
   return c.json({ message: result.message, view: await orderView(db, id) });
 });
 

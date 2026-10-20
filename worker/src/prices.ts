@@ -2,21 +2,34 @@
 // bhaav is good. Practice orders never count.
 
 import type { PricePoint, PriceSeries, Unit } from '@bhaav/shared';
-import { and, asc, eq, isNotNull, type SQL, sql } from 'drizzle-orm';
+import { and, desc, eq, isNotNull, lt, type SQL, sql } from 'drizzle-orm';
 import type { Db } from './db/context';
 import { quotes, requests, suppliers } from './db/schema';
+import { bestOffer } from './engine';
 
 /** "Red  Onions " and "red onions" are the same item. */
 export const itemKey = (item: string) => item.trim().toLowerCase().replace(/\s+/g, ' ');
 
+/** The newest quotes win when there are more than this; the oldest drop off the chart. */
+const MAX_ROWS = 5000;
+
 async function rowsWhere(db: Db, extra?: SQL) {
-  return db
+  const rows = await db
     .select({
       requestId: quotes.requestId,
-      perUnit: quotes.landedPricePerUnit,
+      supplierId: quotes.supplierId,
+      price: quotes.price,
+      unit: quotes.unit,
+      packSize: quotes.packSize,
+      packUnit: quotes.packUnit,
+      minQuantity: quotes.minQuantity,
+      deliveryDate: quotes.deliveryDate,
+      deliveryCharge: quotes.deliveryCharge,
       createdAt: quotes.createdAt,
       item: requests.item,
-      unit: requests.unit,
+      orderUnit: requests.unit,
+      orderQuantity: requests.quantity,
+      deliverBy: requests.deliverBy,
       supplierName: suppliers.name,
     })
     .from(quotes)
@@ -30,44 +43,68 @@ async function rowsWhere(db: Db, extra?: SQL) {
         extra,
       ),
     )
-    .orderBy(asc(quotes.createdAt))
-    .limit(5000)
+    .orderBy(desc(quotes.createdAt))
+    .limit(MAX_ROWS)
     .all();
+  return rows.reverse();
 }
 
 type Row = Awaited<ReturnType<typeof rowsWhere>>[number];
 
+/**
+ * One point per order: its best quote by the same rule as the results page (each supplier's
+ * newest quote, cheapest landed price that fits the order, ties to the earlier delivery and then
+ * the earlier quote), so price memory never disagrees with what the buyer was shown.
+ */
 function group(rows: Row[]): PriceSeries[] {
+  const byOrder = new Map<string, Row[]>();
+  for (const r of rows) byOrder.set(r.requestId, [...(byOrder.get(r.requestId) ?? []), r]);
+
   const series = new Map<
     string,
-    { item: string; unit: Unit; best: Map<string, PricePoint>; quotes: number }
+    { item: string; unit: Unit; points: PricePoint[]; quotes: number }
   >();
-  for (const r of rows) {
-    if (!r.item || !r.unit) continue;
-    const item = itemKey(r.item);
-    const key = `${item}|${r.unit}`;
-    const entry = series.get(key) ?? { item, unit: r.unit, best: new Map(), quotes: 0 };
-    entry.quotes += 1;
-    if (r.perUnit != null) {
-      const seen = entry.best.get(r.requestId);
-      if (!seen || r.perUnit < seen.perUnit) {
-        entry.best.set(r.requestId, {
-          requestId: r.requestId,
-          date: r.createdAt.getTime(),
-          perUnit: r.perUnit,
-          supplierName: r.supplierName,
-        });
-      }
-    }
+  for (const [requestId, orderRows] of byOrder) {
+    const first = orderRows[0];
+    if (!first?.item || !first.orderUnit) continue;
+    const item = itemKey(first.item);
+    const key = `${item}|${first.orderUnit}`;
+    const entry = series.get(key) ?? { item, unit: first.orderUnit, points: [], quotes: 0 };
+    entry.quotes += orderRows.length;
     series.set(key, entry);
+
+    if (first.orderQuantity == null || !first.deliverBy) continue;
+    const order = {
+      quantity: first.orderQuantity,
+      unit: first.orderUnit,
+      deliverBy: first.deliverBy,
+    };
+    const best = bestOffer(
+      orderRows.map((r) => ({
+        supplierId: r.supplierId,
+        price: r.price,
+        unit: r.unit,
+        packSize: r.packSize,
+        packUnit: r.packUnit,
+        minQuantity: r.minQuantity,
+        deliveryDate: r.deliveryDate,
+        deliveryCharge: r.deliveryCharge,
+        createdAt: r.createdAt.getTime(),
+      })),
+      order,
+    );
+    if (best?.perUnit == null) continue;
+    entry.points.push({
+      requestId,
+      date: best.quote.createdAt,
+      perUnit: best.perUnit,
+      supplierName:
+        orderRows.find((r) => r.supplierId === best.quote.supplierId)?.supplierName ?? '',
+    });
   }
+
   return [...series.values()]
-    .map((s) => ({
-      item: s.item,
-      unit: s.unit,
-      quotes: s.quotes,
-      points: [...s.best.values()].sort((a, b) => a.date - b.date),
-    }))
+    .map((s) => ({ ...s, points: s.points.sort((a, b) => a.date - b.date) }))
     .filter((s) => s.points.length > 0)
     .sort((a, b) => (b.points.at(-1)?.date ?? 0) - (a.points.at(-1)?.date ?? 0));
 }
@@ -77,16 +114,23 @@ export async function priceSeries(db: Db): Promise<PriceSeries[]> {
   return group(await rowsWhere(db));
 }
 
-/** Earlier orders' best prices for the same item and unit as this order, oldest first. */
+/**
+ * Orders of the same item and unit placed before this one, each with its best price, oldest
+ * first. Later orders are left out, so an old result never calls a newer order "last time".
+ */
 export async function historyFor(
   db: Db,
-  request: { id: string; item: string | null; unit: Unit | null },
+  request: { id: string; item: string | null; unit: Unit | null; createdAt: Date },
 ): Promise<PricePoint[]> {
   if (!request.item || !request.unit) return [];
   const key = itemKey(request.item);
   const rows = await rowsWhere(
     db,
-    and(eq(requests.unit, request.unit), sql`lower(trim(${requests.item})) = ${key}`),
+    and(
+      eq(requests.unit, request.unit),
+      sql`lower(trim(${requests.item})) = ${key}`,
+      lt(requests.createdAt, request.createdAt),
+    ),
   );
   const [match] = group(rows).filter((s) => s.item === key);
   return match ? match.points.filter((p) => p.requestId !== request.id) : [];

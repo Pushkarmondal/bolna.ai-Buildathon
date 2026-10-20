@@ -21,7 +21,10 @@ test('a buyer orders, Bhaav calls and bargains, and the buyer chooses', async ({
   await page.getByLabel('What to buy').fill(item);
   await page.getByLabel('How much').fill('50');
   await page.getByLabel('Unit').selectOption('kg');
-  await page.getByLabel('Deliver by').fill('2026-12-24');
+  // A week from today, so the test never asks for a date that has passed.
+  await page
+    .getByLabel('Deliver by')
+    .fill(new Date(Date.now() + 7 * 86_400_000).toISOString().slice(0, 10));
   await expect(page.getByText('Complete', { exact: true })).toBeVisible();
 
   // A quantity that isn't a number is caught next to the field.

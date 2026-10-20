@@ -3,6 +3,7 @@ import { lazy, StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { createBrowserRouter, RouterProvider } from 'react-router';
 import { Layout, NotFound, RouteError } from './App';
+import { onSignedOut } from './api';
 import { HomePage } from './pages/Home';
 import './index.css';
 
@@ -35,6 +36,7 @@ const router = createBrowserRouter([
 ]);
 
 const queryClient = new QueryClient({ defaultOptions: { queries: { retry: 1 } } });
+onSignedOut(() => queryClient.setQueryData(['auth'], { authenticated: false }));
 
 const root = document.getElementById('root');
 if (!root) throw new Error('missing #root');

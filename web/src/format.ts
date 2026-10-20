@@ -102,3 +102,8 @@ export function phoneLabel(phone: string): string {
   const m = phone.match(/^\+91(\d{5})(\d{5})$/);
   return m ? `+91 ${m[1]} ${m[2]}` : phone;
 }
+
+/** Today's date in India as YYYY-MM-DD (the date picker's earliest day). */
+export function indiaToday(now = Date.now()): string {
+  return new Date(now + 330 * 60_000).toISOString().slice(0, 10);
+}

@@ -85,10 +85,10 @@ For frontend work with hot reload, also run `npm run dev:web` and open http://lo
 ## Checks
 
 ```bash
-npm test            # 100 Worker tests (Workers runtime, local D1, faked Bolna) + 27 web tests
+npm test            # 112 Worker tests (Workers runtime, local D1, faked Bolna) + 27 web tests
 npm run typecheck   # every package, plus scripts, bench and e2e
 npm run lint
-npm run e2e         # builds, then runs the Playwright tests in your installed Chrome
+npm run e2e         # builds, then runs the Playwright tests (flows and the fit check) in your installed Chrome
 npm run bench -- --dry   # the bench harness, scripted, no network
 ```
 
@@ -135,7 +135,7 @@ npm run bench -- --dry   # the bench harness, scripted, no network
 
 ## Design
 
-The look was chosen with the [ui-ux-pro-max](https://github.com/nextlevelbuilder/ui-ux-pro-max-skill) design skill and written down in `design-system/bhaav/MASTER.md`; its last section lists where the code differs and why. In short: navy for structure, green only for the one main action and for savings, Outfit and Work Sans with Noto Devanagari and Kannada fallbacks, light and dark themes with every text pair at least 4.5:1, 44px touch targets, and a bottom bar on phones. Pages other than Home load on demand, and a page that fails to load after a deploy offers a reload instead of a blank screen.
+An Apple-style look, chosen with the [ui-ux-pro-max](https://github.com/nextlevelbuilder/ui-ux-pro-max-skill) design skill and written down in `design-system/bhaav/MASTER.md` ("Apple direction"): San Francisco on Apple devices and Inter elsewhere (with Noto Devanagari and Kannada), a grey canvas with white cards, one blue for actions, frosted top and tab bars, pill buttons, and grouped lists. Light and dark themes have every text pair at 4.5:1 or better. `e2e/fit.spec.ts` checks every page at nine widths, 320 to 1440px, with worst-case data: nothing may spill, overlap or scroll sideways.
 
 ## Safety rules built into the code
 

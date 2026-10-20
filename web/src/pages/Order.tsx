@@ -5,10 +5,12 @@ import type { LANGUAGES, OrderView, SupplierDto, Unit } from '@bhaav/shared';
 import { useQueryClient } from '@tanstack/react-query';
 import { type FormEvent, useEffect, useRef, useState } from 'react';
 import { useParams } from 'react-router';
+import { OrderUnavailable } from '../App';
 import { api, lastOrder, useOrder } from '../api';
 import {
   callLabel,
   dateLabel,
+  indiaToday,
   isLive,
   ORDER_UNITS,
   phoneLabel,
@@ -42,6 +44,7 @@ import {
   Pill,
   Steps,
   type Tone,
+  useDocumentTitle,
   VoiceMeter,
 } from '../ui';
 import { useWebCall } from '../webcall';
@@ -59,11 +62,18 @@ export function OrderPage() {
     if (id) lastOrder.set(id);
   }, [id]);
 
+  const o = order.data?.order;
+  useDocumentTitle(
+    !o
+      ? 'Order'
+      : o.status === 'draft'
+        ? 'New order'
+        : `Calls: ${[o.quantity, unitWord(o.unit), o.item].filter((x) => x != null && x !== '').join(' ')}`,
+  );
+
   if (order.isPending) return <p className="text-muted-fg">Loading the order…</p>;
   if (order.error || !order.data) {
-    return (
-      <Notice tone="danger">{order.error?.message ?? 'This order could not be loaded.'}</Notice>
-    );
+    return <OrderUnavailable error={order.error} retry={() => order.refetch()} />;
   }
   const view = order.data;
   return view.order.status === 'draft' ? (
@@ -104,7 +114,7 @@ function DraftOrder({ view, desk }: { view: OrderView; desk: WebCall }) {
           { label: 'Start calling', done: false },
         ]}
       />
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+      <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-2">
         <div className="flex min-w-0 flex-col gap-4">
           <TalkCard requestId={o.id} call={desk} />
           <OrderCard view={view} />
@@ -269,6 +279,7 @@ function OrderCard({ view }: { view: OrderView }) {
             className={inputClass}
             type="date"
             id="deliver-by"
+            min={indiaToday()}
             value={o.deliverBy ?? ''}
             onChange={(e) => patch({ deliverBy: e.target.value || null })}
           />
@@ -376,7 +387,7 @@ function SuppliersCard({ view }: { view: OrderView }) {
                 </p>
               </div>
               <Button
-                variant="ghost"
+                variant="ghost-danger"
                 icon={Trash}
                 onClick={() => remove(s)}
                 aria-label={`Remove ${s.name}`}
@@ -562,7 +573,7 @@ function LiveCalls({ view, desk }: { view: OrderView; desk: WebCall }) {
       </p>
 
       {desk.active && (
-        <div className="mb-4 flex flex-wrap items-center gap-3 rounded-xl border border-border bg-card px-4 py-3">
+        <div className="surface mb-4 flex flex-wrap items-center gap-3 px-5 py-4">
           <Pill tone="info" pulse>
             Still talking to Bhaav
           </Pill>
@@ -575,18 +586,28 @@ function LiveCalls({ view, desk }: { view: OrderView; desk: WebCall }) {
         </div>
       )}
 
-      {!working && (
-        <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-success/30 bg-success-soft px-4 py-3 text-success">
-          <p className="font-medium">
-            {o.status === 'approved' ? 'You have chosen a supplier.' : 'Every call is finished.'}
-          </p>
-          <ButtonLink to={`/r/${o.id}/result`} variant="cta" icon={ArrowRight}>
-            {o.status === 'approved' ? 'See the results' : 'See results and choose'}
-          </ButtonLink>
-        </div>
-      )}
+      {!working &&
+        (o.status === 'done' && view.quotes.length === 0 ? (
+          // Finished with nothing to choose from: say why, not "every call is finished".
+          <div className="mb-4">
+            <Notice tone="warn" title="No supplier gave a price">
+              {view.events.some((e) => e.detail?.reason === 'daily_limit')
+                ? "Bhaav stopped because today's limit of phone calls is reached. Start a new order tomorrow."
+                : 'The calls ended without a quote. Problems below says what happened.'}
+            </Notice>
+          </div>
+        ) : (
+          <div className="mb-6 flex flex-wrap items-center justify-between gap-3 rounded-[22px] bg-success-soft px-5 py-4 text-success">
+            <p className="font-medium">
+              {o.status === 'approved' ? 'You have chosen a supplier.' : 'Every call is finished.'}
+            </p>
+            <ButtonLink to={`/r/${o.id}/result`} variant="cta" icon={ArrowRight}>
+              {o.status === 'approved' ? 'See the results' : 'See results and choose'}
+            </ButtonLink>
+          </div>
+        ))}
 
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
+      <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
         <div className="flex min-w-0 flex-col gap-4">
           <Card title="Calls" icon={PhoneCall}>
             <ul className="divide-y divide-border">
@@ -594,9 +615,12 @@ function LiveCalls({ view, desk }: { view: OrderView; desk: WebCall }) {
                 const own = view.calls.filter((c) => c.supplierId === s.id);
                 const latest = [...view.quotes].reverse().find((q) => q.supplierId === s.id);
                 return (
-                  <li key={s.id} className="flex flex-wrap items-center justify-between gap-3 py-3">
+                  <li
+                    key={s.id}
+                    className="flex flex-wrap items-center justify-between gap-3 py-4 first:pt-0 last:pb-0"
+                  >
                     <div className="min-w-0">
-                      <p className="font-medium">{s.name}</p>
+                      <p className="font-semibold">{s.name}</p>
                       <p className="tabular text-sm text-muted-fg">
                         {latest
                           ? `${rupees(latest.price)} per ${latest.packSize ? `${latest.packSize} ${unitWord(latest.packUnit)} pack` : unitWord(latest.unit)}`
@@ -653,29 +677,53 @@ function QuoteBook({
           A quote appears here the moment a supplier confirms it.
         </EmptyState>
       ) : (
-        <section
-          className="-mx-4 overflow-x-auto px-4 sm:-mx-5 sm:px-5"
-          aria-label="Quote book table"
-          // biome-ignore lint/a11y/noNoninteractiveTabindex: on a phone the table scrolls sideways, and a keyboard can only scroll what takes focus
-          tabIndex={0}
-        >
-          <table className="w-full min-w-[34rem] text-left text-sm">
+        // Sized to the card, not the screen: a stacked list until the card is wide enough for the
+        // table, so the quote book never scrolls sideways at any width.
+        <div className="@container">
+          <ul className="flex flex-col @min-[32rem]:hidden">
+            {view.quotes.map((q) => (
+              <li
+                key={q.id}
+                className="border-t border-border py-4 first:border-t-0 first:pt-0 last:pb-0"
+              >
+                <div className="flex items-baseline justify-between gap-3">
+                  <span className="min-w-0 font-semibold">{supplierName(q.supplierId)}</span>
+                  <span className="shrink-0 text-right">
+                    <span className="tabular text-[21px] font-bold tracking-tight">
+                      {rupees(q.landedPricePerUnit)}
+                    </span>
+                    <span className="text-sm text-muted-fg">
+                      {' '}
+                      per {unitWord(view.order.unit)}, delivered
+                    </span>
+                  </span>
+                </div>
+                <p className="tabular mt-0.5 text-sm text-muted-fg">
+                  {timeLabel(q.createdAt)} · quoted {rupees(q.price)} /{' '}
+                  {q.packSize ? `${q.packSize} ${unitWord(q.packUnit)}` : unitWord(q.unit)}
+                  {q.deliveryCharge ? ` + ${rupees(q.deliveryCharge)} delivery` : ''}
+                </p>
+                <p className="mt-1 text-[15px] text-muted-fg">“{q.supplierWords}”</p>
+              </li>
+            ))}
+          </ul>
+          <table className="hidden w-full text-left text-[15px] @min-[32rem]:table">
             <caption className="sr-only">Every quote suppliers confirmed, oldest first</caption>
             <thead className="text-muted-fg">
               <tr className="border-b border-border">
-                <th scope="col" className="py-2 pr-3 font-medium">
+                <th scope="col" className="pb-3 pr-3 text-sm font-medium">
                   Time
                 </th>
-                <th scope="col" className="py-2 pr-3 font-medium">
+                <th scope="col" className="pb-3 pr-3 text-sm font-medium">
                   Supplier
                 </th>
-                <th scope="col" className="py-2 pr-3 font-medium">
+                <th scope="col" className="pb-3 pr-3 text-sm font-medium">
                   Quote
                 </th>
-                <th scope="col" className="py-2 pr-3 font-medium">
+                <th scope="col" className="pb-3 pr-3 text-sm font-medium">
                   Per {unitWord(view.order.unit)}, delivered
                 </th>
-                <th scope="col" className="py-2 font-medium">
+                <th scope="col" className="pb-3 text-sm font-medium">
                   Their words
                 </th>
               </tr>
@@ -683,24 +731,27 @@ function QuoteBook({
             <tbody className="divide-y divide-border">
               {view.quotes.map((q) => (
                 <tr key={q.id}>
-                  <td className="tabular whitespace-nowrap py-2.5 pr-3 text-muted-fg">
+                  <td className="tabular whitespace-nowrap py-3 pr-3 text-muted-fg">
                     {timeLabel(q.createdAt)}
                   </td>
-                  <td className="py-2.5 pr-3">{supplierName(q.supplierId)}</td>
-                  <td className="tabular whitespace-nowrap py-2.5 pr-3">
-                    {rupees(q.price)} /{' '}
-                    {q.packSize ? `${q.packSize} ${unitWord(q.packUnit)}` : unitWord(q.unit)}
+                  <td className="py-3 pr-3">{supplierName(q.supplierId)}</td>
+                  <td className="tabular py-3 pr-3">
+                    {/* The price and its unit stay on one line; a delivery charge may wrap. */}
+                    <span className="whitespace-nowrap">
+                      {rupees(q.price)} /{' '}
+                      {q.packSize ? `${q.packSize} ${unitWord(q.packUnit)}` : unitWord(q.unit)}
+                    </span>
                     {q.deliveryCharge ? ` + ${rupees(q.deliveryCharge)} delivery` : ''}
                   </td>
-                  <td className="tabular whitespace-nowrap py-2.5 pr-3 font-semibold">
+                  <td className="tabular whitespace-nowrap py-3 pr-3 font-semibold">
                     {rupees(q.landedPricePerUnit)}
                   </td>
-                  <td className="py-2.5 text-muted-fg">“{q.supplierWords}”</td>
+                  <td className="py-3 text-muted-fg">“{q.supplierWords}”</td>
                 </tr>
               ))}
             </tbody>
           </table>
-        </section>
+        </div>
       )}
     </Card>
   );
@@ -725,7 +776,7 @@ function LieCatcher({ view }: { view: OrderView }) {
             {blocked.map((e) => (
               <li
                 key={e.id}
-                className="rounded-xl border border-danger/30 bg-danger-soft px-3 py-2.5 text-sm text-danger"
+                className="rounded-2xl bg-danger-soft px-4 py-3 text-[15px] text-danger"
               >
                 <p className="font-semibold">
                   {e.type === 'blocked'

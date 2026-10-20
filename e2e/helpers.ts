@@ -6,7 +6,10 @@ export const stamp = () => Date.now().toString(36);
 export async function signIn(page: Page) {
   await page.goto('/');
   const passcode = page.getByLabel('Passcode');
-  const heading = page.getByRole('heading', { level: 1 });
+  // The passcode screen has its own h1; wait for a page's, not that one.
+  const heading = page
+    .getByRole('heading', { level: 1 })
+    .filter({ hasNotText: 'Enter the passcode' });
   // Wait until the app knows whether this browser is signed in: the gate or a page, never "Loading".
   await expect(passcode.or(heading)).toBeVisible();
   if (await passcode.isVisible()) {

@@ -232,43 +232,51 @@ Before delivering any UI code, verify:
 
 ---
 
-## Bhaav adjustments
+## Apple direction (20 Oct 2026)
 
-What the code (`web/src/index.css`, `web/src/ui.tsx`) does differently from the generated file above, and why. Where the two disagree, this section wins.
+The founder asked for a premium, Apple-like look. This section replaces the earlier "Bhaav adjustments" (navy, green, Outfit and Work Sans); where it and the generated file above disagree, this section wins. The skill's design-system search proposed a luxury palette (serif and gold) that did not fit; its style search matched **Liquid Glass** (for navigation chrome, used sparingly) and **Bento Box Grid** (Apple-style cards on #F5F5F7), and its typography search matched **Inter** as the neutral sans. Those are the sources.
 
 ### Colour
 
-| Token | Light | Dark | Why it moved |
-|-------|-------|------|--------------|
-| `--accent` / `--on-accent` | `#047857` / `#FFFFFF` | `#34D399` / `#052E1C` | The generated pair was black text on `#059669` (5.57:1). White text on a green button reads better and is what shop owners expect, but white on `#059669` is only 3.77:1, so the green went one step darker: white on `#047857` is 5.48:1. Dark mode uses dark text on a light green (7.73:1). |
-| `--input-border` | `#64748B` | `#7C8BA1` | A separate token from `--border`. Card borders stay faint; input borders must be visible as controls (3:1 minimum for non-text UI). `#64748B` on white is 4.76:1; `#7C8BA1` on the dark card is 5.03:1. |
-| `--primary` (dark) | — | `#9DB9DE` on `#0B1626` text (9.01:1) | The generated file had no dark theme. Every token has a dark value, chosen and measured by script, not inverted. |
-| Status tones | `success`, `warn`, `danger`, `info` each have a `-fg` and a `-bg` | same | Every status also carries words or an icon, never colour alone. |
+| Token | Light | Dark | Notes |
+|-------|-------|------|-------|
+| `--bg` (page) | `#F5F5F7` | `#000000` | Apple's grey canvas; black in dark |
+| `--card` | `#FFFFFF` | `#1C1C1E` | Cards sit on the page with a soft shadow (light) or a hairline (dark) |
+| `--fg` | `#1D1D1F` | `#F5F5F7` | 15.5:1 / 19.3:1 |
+| `--muted-fg` | `#636366` | `#A1A1A6` | Apple's own `#6E6E73` is only 4.15:1 on the grey wells, so the darker system grey is used: 4.9:1 or better on every surface |
+| `--muted` (wells, chips) | `#E8E8ED` | `#2C2C2E` | |
+| `--accent` (buttons) | `#0071E3` | `#0071E3` | White text 4.7:1. Apple's dark-mode `#0A84FF` gives white text only 3.65:1, so the light blue is kept in both themes, as apple.com does |
+| `--link` | `#0066CC` | `#2997FF` | 5.6:1 / 7.0:1 |
+| `--input-border` | `#86868B` | `#8E8E93` | 3.6:1 / 5.2:1 for the field outline |
+| success / warn / danger / info | `#1D7A35` `#A24800` `#C4001B` `#0066CC` on soft tints | `#30D158` `#FF9F0A` `#FF6961` `#64B5FF` on dark tints | Every pair 4.7:1 or better |
 
-Green is kept for two things only: the one main action on a screen, and savings. Navy carries structure.
+One blue for actions. Green only for savings and good status. Every status also has words or an icon.
 
 ### Type
 
-- Outfit for headings, Work Sans for body (as generated).
-- Both stacks fall back to **Noto Sans Devanagari** and **Noto Sans Kannada**, loaded from Google Fonts, because order names, supplier names and transcripts arrive in Hindi and Kannada script. Without them the browser picks a system font with different metrics and the line height jumps.
-- Prices, timers and counts use `.tabular` (tabular numbers) so digits don't shift while a call is live.
+- San Francisco on Apple devices through the system font stack (`-apple-system, BlinkMacSystemFont`), Inter elsewhere, then Noto Sans Devanagari and Kannada for Hindi and Kannada text.
+- 17px body, line height 1.47, tracking −0.022em (Apple's body settings); headlines bold with tracking −0.028em, the home headline −0.035em at up to 72px.
 
-### Icons
+### Surfaces and shape
 
-- Phosphor (`@phosphor-icons/react`), imported one icon at a time through `web/src/icons.ts` (`dist/icons/<Name>`). The package's root entry pulls in every icon.
-- Decorative icons carry `aria-hidden`; an icon is never the only label on a control.
-
-### Layout and navigation
-
-- Four destinations (New order, Price memory, Be the supplier, Test bench). On phones they sit in a bottom bar within thumb reach (`md:hidden`, safe-area padding); from 768px up they move into the header.
-- Every control is at least 44px tall (`min-h-11`); large actions are 48px (`min-h-12`).
-- Pages other than Home are loaded on demand (`React.lazy` in `web/src/main.tsx`), which keeps the first download under 500 kB.
-
-### Buttons
-
-- A main button is never greyed out with its reason hidden in a tooltip. It can always be pressed; if something is missing, the screen says what, next to the field.
-- While busy, a button shows a spinner, says so (`aria-busy`) and ignores repeat presses.
+- `.surface`: white card, 22px corners, `0 1px 2px / 4%, 0 8px 28px / 6%` shadow in light; `#2C2C2E` hairline in dark.
+- `.glass`: the top bar and the phone tab bar only, `saturate(180%) blur(20px)` over 72% white or near-black. Solid when the person asks for reduced transparency or the browser has no backdrop filter.
+- Buttons are pills (fully rounded), 44px (48px large). Filled blue for the action, a hairline pill with blue text beside it.
+- Lists are grouped rows divided by hairlines inside one card (like iOS Settings), not separate boxes.
+- Inner wells (figures, transcripts, the WhatsApp text) use the page grey inside the white card.
 
 ### Motion
 
-- Only colour and filter transitions (200ms), the live-call pulse and the voice meter. Everything is cut to near zero under `prefers-reduced-motion`.
+- Each page fades and rises 8px over 420ms on Apple's ease (`cubic-bezier(.25,.1,.25,1)`); buttons press to 98%. All of it is cut to near zero under `prefers-reduced-motion`.
+
+### Layout rules that tests enforce
+
+- Long unbroken words wrap anywhere (`overflow-wrap: anywhere` on the body), so an 80-letter name never leaves its card.
+- The quote book is a stacked list until its card is 32rem wide (a container query), so it never scrolls sideways.
+- `e2e/fit.spec.ts` loads every page at 1440, 1280, 1100, 1000, 880, 700, 375, 360 and 320px with worst-case data and fails on any spill, overlap, card overflow, sideways scroll or off-screen bar.
+
+### Kept from before
+
+- Pages other than Home load on demand; a page that fails to load after a deploy offers a reload.
+- A main button is never greyed out with its reason hidden; it can be pressed and the screen says what is missing.
+- Phosphor icons, imported one by one through `web/src/icons.ts`, regular weight (closest to SF Symbols).
