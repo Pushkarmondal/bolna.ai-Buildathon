@@ -53,7 +53,7 @@ web/src/choice.ts           what became of the buyer's choice after the confirma
 web/src/summary.ts          the WhatsApp text
 web/src/chart.tsx           the price chart (SVG, no chart library)
 web/test/                   unit tests for the web app's logic
-e2e/                        Playwright tests: the whole buyer journey against the fake Bolna
+e2e/                        Playwright tests: every journey, every link, the fit check and contrast, against the fake Bolna
 design-system/bhaav/        the design system (colours, type, rules) and where the code departs from it
 scripts/setup-agents.ts     registers the custom LLM and creates both Bolna agents
 scripts/fake-bolna.ts       a stand-in for Bolna's API, for running everything locally
@@ -78,17 +78,17 @@ In a second terminal, run the fake Bolna with the same secrets:
 set -a; . worker/.dev.vars; set +a; WORKER_URL=http://localhost:8787 npm run fake-bolna
 ```
 
-Open http://localhost:8787, enter `APP_PASSCODE`, create an order, add suppliers (any 10-digit numbers; nothing is dialled), and press **Start calling**. The fake calls play out in about 30 seconds. Browser calls (Talk and Be the supplier) need the real Bolna.
+Open http://localhost:8787, enter `APP_PASSCODE`, create an order, add suppliers (any 10-digit numbers; nothing is dialled), and press **Start calling**. The fake calls play out in about 30 seconds. Browser calls (Talk and Be the supplier) need the real Bolna. The fake also stands in for Groq (`GROQ_BASE_URL=http://localhost:8790/groq`): it refuses every turn, so Bhaav says its safe line, except one scripted lie the tests use to watch the lie-catcher stop it.
 
 For frontend work with hot reload, also run `npm run dev:web` and open http://localhost:5173.
 
 ## Checks
 
 ```bash
-npm test            # 112 Worker tests (Workers runtime, local D1, faked Bolna) + 27 web tests
+npm test            # 113 Worker tests (Workers runtime, local D1, faked Bolna) + 29 web tests
 npm run typecheck   # every package, plus scripts, bench and e2e
 npm run lint
-npm run e2e         # builds, then runs the Playwright tests (flows and the fit check) in your installed Chrome
+npm run e2e         # builds, then runs 33 Playwright tests in your installed Chrome: journeys, links, fit at 9 widths, contrast
 npm run bench -- --dry   # the bench harness, scripted, no network
 ```
 

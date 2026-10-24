@@ -19,6 +19,8 @@ const vars = devVars();
 process.env.E2E_PASSCODE ??= vars.APP_PASSCODE;
 // The fit check writes worst-case quotes through the tools endpoint, as Bolna would.
 process.env.E2E_TOOL_SECRET ??= vars.TOOL_SECRET;
+// The journeys test calls the custom-LLM endpoint as Bolna would (Groq is unreachable locally).
+process.env.E2E_LLM_SECRET ??= vars.LLM_SECRET;
 
 export default defineConfig({
   testDir: 'e2e',

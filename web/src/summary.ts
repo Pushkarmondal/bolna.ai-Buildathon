@@ -4,6 +4,24 @@ import type { OrderView } from '@bhaav/shared';
 import { choiceOf } from './choice';
 import { dateLabel, quoteTerms, rupees, unitWord } from './format';
 
+/**
+ * What calling around saved, per order unit and in total. Needs two or more quotes: one quote has
+ * nothing to be cheaper than, so it says nothing rather than "saved ₹0".
+ */
+export function savingOf(
+  view: OrderView,
+): { perUnit: number; total: number | null; pct: number } | null {
+  const best = view.ranking.find((r) => r.quoteId === view.bestQuoteId);
+  const heard = view.quotes.filter((q) => q.landedPricePerUnit != null).length;
+  if (heard < 2 || best?.perUnit == null || view.highestPerUnit == null) return null;
+  const perUnit = Math.max(0, view.highestPerUnit - best.perUnit);
+  return {
+    perUnit,
+    total: view.order.quantity == null ? null : perUnit * view.order.quantity,
+    pct: view.highestPerUnit > 0 ? (perUnit / view.highestPerUnit) * 100 : 0,
+  };
+}
+
 export function whatsappSummary(view: OrderView): string {
   const o = view.order;
   const unit = unitWord(o.unit);
@@ -25,17 +43,9 @@ export function whatsappSummary(view: OrderView): string {
       .join(', ');
     lines.push(`${i + 1}. ${name(r.supplierId)}: ${price}${tags ? ` (${tags})` : ''}`);
   });
-  const best = view.ranking.find((r) => r.quoteId === view.bestQuoteId);
-  if (
-    best?.perUnit != null &&
-    view.highestPerUnit != null &&
-    o.quantity != null &&
-    view.highestPerUnit > best.perUnit
-  ) {
-    lines.push(
-      '',
-      `Saved ${rupees((view.highestPerUnit - best.perUnit) * o.quantity)} against the costliest quote.`,
-    );
+  const saving = savingOf(view);
+  if (saving?.total) {
+    lines.push('', `Saved ${rupees(saving.total)} against the costliest quote.`);
   }
   if (choice?.changed) {
     lines.push(

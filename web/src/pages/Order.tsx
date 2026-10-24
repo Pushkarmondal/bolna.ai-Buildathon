@@ -2,11 +2,10 @@
 // once calls start, the same page shows each call live, the quote book and the lie-catcher.
 
 import type { LANGUAGES, OrderView, SupplierDto, Unit } from '@bhaav/shared';
-import { useQueryClient } from '@tanstack/react-query';
 import { type FormEvent, useEffect, useRef, useState } from 'react';
 import { useParams } from 'react-router';
 import { OrderUnavailable } from '../App';
-import { api, lastOrder, useOrder } from '../api';
+import { api, lastOrder, useApplyOrder, useOrder } from '../api';
 import {
   callLabel,
   dateLabel,
@@ -85,10 +84,7 @@ export function OrderPage() {
 
 // ---- Draft: talk, edit, add suppliers, start ----------------------------------------------
 
-function useSetView(id: string) {
-  const queryClient = useQueryClient();
-  return (view: OrderView) => queryClient.setQueryData(['order', id], view);
-}
+const useSetView = useApplyOrder;
 
 const LANGUAGE_LABELS: Record<(typeof LANGUAGES)[number], string> = {
   hi: 'Hindi or Hinglish',
@@ -200,13 +196,15 @@ function OrderCard({ view }: { view: OrderView }) {
   const setView = useSetView(view.order.id);
   const [error, setError] = useState<string | null>(null);
   const [quantityError, setQuantityError] = useState<string | null>(null);
+  const [dateError, setDateError] = useState<string | null>(null);
   const o = view.order;
 
-  const patch = (body: Record<string, unknown>) => {
+  /** Saves a change; a refusal shows next to the field it is about, or under the card. */
+  const patch = (body: Record<string, unknown>, onError: (m: string) => void = setError) => {
     setError(null);
     api<OrderView>(`/api/requests/${o.id}`, { method: 'PATCH', json: body })
       .then(setView)
-      .catch((e: Error) => setError(e.message));
+      .catch((e: Error) => onError(e.message));
   };
 
   const item = useLiveField(o.item ?? '', (v) => patch({ item: v.trim() || null }));
@@ -274,14 +272,17 @@ function OrderCard({ view }: { view: OrderView }) {
             ))}
           </select>
         </Field>
-        <Field id="deliver-by" label="Deliver by">
+        <Field id="deliver-by" label="Deliver by" error={dateError}>
           <input
             className={inputClass}
             type="date"
-            id="deliver-by"
             min={indiaToday()}
             value={o.deliverBy ?? ''}
-            onChange={(e) => patch({ deliverBy: e.target.value || null })}
+            onChange={(e) => {
+              setDateError(null);
+              patch({ deliverBy: e.target.value || null }, setDateError);
+            }}
+            {...fieldProps('deliver-by', { error: dateError })}
           />
         </Field>
         <Field id="area" label="Area" hint="Optional">

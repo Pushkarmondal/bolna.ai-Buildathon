@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { whatsappLink, whatsappSummary } from '../src/summary';
+import { savingOf, whatsappLink, whatsappSummary } from '../src/summary';
 import { approvedOrder, call, finishedOrder, quote } from './fixtures';
 
 describe('whatsappSummary', () => {
@@ -61,5 +61,21 @@ describe('whatsappLink', () => {
     expect(whatsappLink('Mehta & Sons\n₹34')).toBe(
       'https://wa.me/?text=Mehta%20%26%20Sons%0A%E2%82%B934',
     );
+  });
+});
+
+describe('savingOf', () => {
+  it('compares the best price with the costliest quote heard', () => {
+    expect(savingOf(finishedOrder())).toEqual({ perUnit: 2, total: 100, pct: (2 / 36) * 100 });
+  });
+
+  it('says nothing with a single quote, instead of "saved ₹0"', () => {
+    const view = finishedOrder();
+    view.quotes = view.quotes.slice(1, 2);
+    view.ranking = [{ quoteId: 'q_g1', supplierId: 'sup_g', perUnit: 34, reasons: [] }];
+    view.bestQuoteId = 'q_g1';
+    view.highestPerUnit = 34;
+    expect(savingOf(view)).toBeNull();
+    expect(whatsappSummary(view)).not.toContain('Saved');
   });
 });

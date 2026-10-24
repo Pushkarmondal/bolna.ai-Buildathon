@@ -1,5 +1,6 @@
 import type { OrderView, Persona, PriceSeries } from '@bhaav/shared';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useCallback } from 'react';
 import { isLive } from './format';
 
 export class ApiError extends Error {
@@ -67,13 +68,29 @@ export function useOrder(id: string) {
       const error = query.state.error;
       if (error instanceof ApiError && (error.status === 404 || error.status === 401)) return false;
       const view = query.state.data;
-      // A finished or approved order only changes again while Bhaav is on a call (the
-      // confirmation call), or when this screen itself approves, which updates it directly.
+      // A finished or approved order changes rarely (an approval from another device), so it is
+      // checked slowly rather than never: a missed update always corrects itself.
       const settled = view?.order.status === 'done' || view?.order.status === 'approved';
-      if (settled && !view?.calls.some((c) => isLive(c.status))) return false;
+      if (settled && !view?.calls.some((c) => isLive(c.status))) return 15_000;
       return 2000;
     },
   });
+}
+
+/**
+ * Puts an order the server just returned on screen. A refresh already on its way is cancelled
+ * first: otherwise its older answer can arrive after this one and put the old state back (an
+ * approval that seems not to happen, on a slow network or right after switching tabs).
+ */
+export function useApplyOrder(id: string) {
+  const queryClient = useQueryClient();
+  return useCallback(
+    async (view: OrderView) => {
+      await queryClient.cancelQueries({ queryKey: ['order', id] });
+      queryClient.setQueryData(['order', id], view);
+    },
+    [queryClient, id],
+  );
 }
 
 export function usePrices() {

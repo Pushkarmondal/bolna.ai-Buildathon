@@ -2,11 +2,10 @@
 // comes after: the optional confirmation call, a WhatsApp summary, and how today compares.
 
 import type { OrderView } from '@bhaav/shared';
-import { useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useParams } from 'react-router';
 import { OrderUnavailable } from '../App';
-import { api, useOrder } from '../api';
+import { api, useApplyOrder, useOrder } from '../api';
 import { PriceChart, trendSentence } from '../chart';
 import { type Choice, choiceOf } from '../choice';
 import { callLabel, dateLabel, isLive, quoteTerms, rupees, unitWord } from '../format';
@@ -20,7 +19,7 @@ import {
   Trophy,
   WhatsappLogo,
 } from '../icons';
-import { whatsappLink, whatsappSummary } from '../summary';
+import { savingOf, whatsappLink, whatsappSummary } from '../summary';
 import {
   Button,
   ButtonLink,
@@ -42,7 +41,7 @@ const REASONS: Record<string, string> = {
 export function ResultPage() {
   const { id = '' } = useParams();
   const order = useOrder(id);
-  const queryClient = useQueryClient();
+  const applyOrder = useApplyOrder(id);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
 
@@ -64,18 +63,14 @@ export function ResultPage() {
   const quote = (qid: string) => view.quotes.find((q) => q.id === qid);
   const best = view.ranking.find((r) => r.quoteId === view.bestQuoteId);
   const finished = o.status === 'done' || o.status === 'approved';
-  const saving =
-    best?.perUnit != null && view.highestPerUnit != null
-      ? Math.max(0, view.highestPerUnit - best.perUnit)
-      : null;
+  const saving = savingOf(view);
   const choice = choiceOf(view);
 
   async function approve(quoteId: string) {
     setBusy(quoteId);
     setError(null);
     try {
-      queryClient.setQueryData(
-        ['order', o.id],
+      await applyOrder(
         await api<OrderView>(`/api/requests/${o.id}/approve`, { json: { quoteId } }),
       );
     } catch (err) {
@@ -89,7 +84,7 @@ export function ResultPage() {
     <>
       <PageTitle
         eyebrow="Results"
-        title={`${o.quantity ?? ''} ${unit} ${o.item ?? ''}`.trim()}
+        title={`${o.quantity ?? ''} ${unit} ${o.item ?? ''}`.trim() || 'Order results'}
         sub={`For ${o.buyerName ?? 'you'}, delivered by ${dateLabel(o.deliverBy)}`}
         aside={
           <ButtonLink to={`/r/${o.id}`} variant="ghost" icon={ArrowLeft} className="-ml-5">
@@ -99,10 +94,16 @@ export function ResultPage() {
       />
 
       <div className="mb-4 flex flex-col gap-3">
-        {!finished && (
+        {o.status === 'draft' ? (
           <Notice tone="info">
-            Bhaav is still calling. These results update as quotes come in.
+            Calls have not started yet. Finish the order on the calls page and press Start calling.
           </Notice>
+        ) : (
+          !finished && (
+            <Notice tone="info">
+              Bhaav is still calling. These results update as quotes come in.
+            </Notice>
+          )
         )}
         {error && <Notice tone="danger">{error}</Notice>}
       </div>
@@ -115,13 +116,13 @@ export function ResultPage() {
         />
         <Stat
           label="Saved against the costliest quote"
-          value={saving != null && o.quantity != null ? rupees(saving * o.quantity) : '—'}
+          value={saving?.total != null ? rupees(saving.total) : '—'}
           note={
-            saving != null && view.highestPerUnit
-              ? `${((saving / view.highestPerUnit) * 100).toFixed(1)}% less than ${rupees(view.highestPerUnit)} / ${unit}`
+            saving && view.highestPerUnit
+              ? `${saving.pct.toFixed(1)}% less than ${rupees(view.highestPerUnit)} / ${unit}`
               : 'Needs two or more quotes'
           }
-          tone={saving ? 'success' : undefined}
+          tone={saving?.perUnit ? 'success' : undefined}
         />
         <Stat
           label="Order total at best price"
@@ -246,7 +247,7 @@ function ConfirmCard({
   choice: Choice;
   supplierName: string;
 }) {
-  const queryClient = useQueryClient();
+  const applyOrder = useApplyOrder(view.order.id);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const { confirmCall, changed, approved } = choice;
@@ -258,7 +259,7 @@ function ConfirmCard({
       const result = await api<{ view: OrderView }>(`/api/requests/${view.order.id}/confirm`, {
         method: 'POST',
       });
-      queryClient.setQueryData(['order', view.order.id], result.view);
+      await applyOrder(result.view);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not place the call.');
     } finally {
@@ -317,6 +318,24 @@ function ConfirmCard({
   );
 }
 
+/** Copies through a hidden text box and the browser's copy command; true when it worked. */
+function copyWithSelection(text: string): boolean {
+  const box = document.createElement('textarea');
+  box.value = text;
+  box.setAttribute('readonly', '');
+  box.style.position = 'fixed';
+  box.style.opacity = '0';
+  document.body.appendChild(box);
+  box.select();
+  try {
+    return document.execCommand('copy');
+  } catch {
+    return false;
+  } finally {
+    box.remove();
+  }
+}
+
 function ShareCard({ view }: { view: OrderView }) {
   const text = whatsappSummary(view);
   const [copied, setCopied] = useState<'yes' | 'no' | null>(null);
@@ -326,7 +345,9 @@ function ShareCard({ view }: { view: OrderView }) {
       await navigator.clipboard.writeText(text);
       setCopied('yes');
     } catch {
-      setCopied('no');
+      // In-app browsers (WhatsApp's, Instagram's) often block the clipboard API; the older copy
+      // command still works there. Only if both fail is the buyer asked to select the text.
+      setCopied(copyWithSelection(text) ? 'yes' : 'no');
     }
   }
 

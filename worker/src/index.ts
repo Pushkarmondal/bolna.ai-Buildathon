@@ -296,6 +296,8 @@ api.post(
     const db = dbOf(c);
     const body = c.req.valid('json');
     const bolna = { apiKey: c.env.BOLNA_API_KEY, baseUrl: c.env.BOLNA_BASE_URL };
+    // Set once a practice call is saved, so a failed start can mark it failed, not leave it queued.
+    let practiceCallId: string | null = null;
     try {
       if (body.kind === 'desk') {
         if (!c.env.BOLNA_DESK_AGENT_ID)
@@ -321,6 +323,7 @@ api.post(
         return c.json({ error: 'Practice is busy right now. Try again in a few minutes.' }, 429);
       }
       const practice = await createPractice(db, persona);
+      practiceCallId = practice.call.id;
       const session = await mintWebSession(bolna, {
         agentId: c.env.BOLNA_CALLER_AGENT_ID,
         userData: callerUserData(
@@ -338,6 +341,12 @@ api.post(
       }
       return c.json({ session, requestId: practice.request.id, callId: practice.call.id });
     } catch (error) {
+      if (practiceCallId) {
+        await db
+          .update(calls)
+          .set({ status: 'failed', endedAt: new Date() })
+          .where(eq(calls.id, practiceCallId));
+      }
       return c.json(
         { error: 'Bolna would not start the browser call.', detail: String(error) },
         502,

@@ -23,6 +23,7 @@ interface FakeBolna {
   }>;
   executions: Map<string, Record<string, unknown>>;
   failNextCall: () => void;
+  failNextMint: () => void;
   /** The execution id Bolna gave the nth placed call (1-based); unique across tests. */
   exec: (n: number) => string;
   runId: string;
@@ -36,6 +37,7 @@ function fakeBolna(): FakeBolna {
   const exec = (n: number) => `exec_${prefix}_${n}`;
   const runId = `run_${prefix}`;
   let failNext = false;
+  let failMint = false;
   vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
     const url = input instanceof Request ? input.url : String(input);
     if (url === 'https://bolna.test/call') {
@@ -51,6 +53,10 @@ function fakeBolna(): FakeBolna {
       });
     }
     if (url === 'https://bolna.test/web-call/session') {
+      if (failMint) {
+        failMint = false;
+        return new Response('no capacity', { status: 503 });
+      }
       return Response.json({ run_id: runId, agent_id: 'agent-caller', expires_in: 120 });
     }
     const execution = /^https:\/\/bolna\.test\/executions\/(.+)$/.exec(url);
@@ -61,7 +67,14 @@ function fakeBolna(): FakeBolna {
     }
     throw new Error(`unexpected fetch to ${url}`);
   });
-  return { placed, executions, failNextCall: () => (failNext = true), exec, runId };
+  return {
+    placed,
+    executions,
+    failNextCall: () => (failNext = true),
+    failNextMint: () => (failMint = true),
+    exec,
+    runId,
+  };
 }
 
 afterEach(() => vi.restoreAllMocks());
@@ -643,6 +656,21 @@ describe('practice mode', () => {
       transcript: 'assistant: Namaste ji',
       bestOffer: '₹31 per kilo',
     });
+  });
+
+  it('marks the practice call failed when Bolna will not start it', async () => {
+    const bolna = fakeBolna();
+    bolna.failNextMint();
+    const res = await send('/api/web-session', {
+      method: 'POST',
+      json: { kind: 'practice', personaId: 'oil' },
+    });
+    expect(res.status).toBe(502);
+    const newest = await db.select().from(calls).where(eq(calls.channel, 'web')).all();
+    const practiceCall = newest
+      .filter((c) => c.round === 2)
+      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())[0];
+    expect(practiceCall?.status).toBe('failed');
   });
 
   it('mints a Desk session for an order', async () => {

@@ -5,6 +5,10 @@
 //   WORKER_URL=http://localhost:8787 TOOL_SECRET=… WEBHOOK_SECRET=… npm run fake-bolna
 //
 // Then point the Worker at it in worker/.dev.vars: BOLNA_BASE_URL=http://localhost:8790
+//
+// It also stands in for Groq at /groq (GROQ_BASE_URL=http://localhost:8790/groq), for one test:
+// when the supplier says "lie test", the "AI" answers with a price nobody quoted, so the
+// lie-catcher can be seen stopping it. Every other turn gets a 503, as if Groq were down.
 
 import { randomUUID } from 'node:crypto';
 import { createServer } from 'node:http';
@@ -103,6 +107,25 @@ createServer(async (req, res) => {
     res.writeHead(status, { 'content-type': 'application/json' });
     res.end(JSON.stringify(json));
   };
+
+  if (req.method === 'POST' && req.url === '/groq/chat/completions') {
+    const said = String(
+      [...(body.messages ?? [])].reverse().find((m: { role?: string }) => m.role === 'user')
+        ?.content ?? '',
+    );
+    if (!said.includes('lie test'))
+      return send(503, { error: 'the fake Groq only answers lie tests' });
+    // ₹27.75 is no quote, quantity or date, so the lie-catcher must stop this sentence.
+    const chunk = (delta: Record<string, unknown>, finish: string | null = null) =>
+      `data: ${JSON.stringify({ choices: [{ index: 0, delta, finish_reason: finish }] })}\n\n`;
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.end(
+      chunk({ role: 'assistant', content: 'Doosre supplier ne ₹27.75 bola hai. ' }) +
+        chunk({}, 'stop') +
+        'data: [DONE]\n\n',
+    );
+    return;
+  }
 
   if (req.method === 'POST' && req.url === '/call') {
     const id = `fake_exec_${++count}_${randomUUID().slice(0, 8)}`;
