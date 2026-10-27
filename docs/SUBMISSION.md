@@ -45,8 +45,10 @@ Recommended (194): Bhaav phones your suppliers in Hindi, Kannada or English, get
 
 - [ ] The app opens on a phone and on another network
 - [ ] `npm test`, `npm run lint`, `npm run typecheck` and `npm run e2e` all pass on the commit you submit
-- [ ] The passcode works; practice calls stop at 2 minutes
+- [ ] The passcode works; practice calls stop at 2 minutes (`BOLNA_PRACTICE_AGENT_ID` is set)
 - [ ] Bolna has credit for at least 40 judge minutes
 - [ ] `SUPPLIER_ALLOWLIST` is set to the partner suppliers only
+- [ ] Real supplier calls are recorded between 10:00 and 19:00 India time (`CALL_HOURS`)
+- [ ] The bench was run for real (`npm run bench`) and its unbacked count is the number on the proof slide
 - [ ] The repo is public, has this README, and has no keys
 - [ ] The deck and video open in a private window

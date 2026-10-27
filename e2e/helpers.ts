@@ -34,6 +34,7 @@ export async function addSupplier(
   await page.getByLabel('Name', { exact: true }).fill(supplier.name);
   await page.getByLabel('Mobile number').fill(supplier.phone);
   await page.getByLabel('Speaks').selectOption(supplier.language ?? 'hi');
+  await page.getByLabel('How they agreed').fill('said yes on WhatsApp');
   await page.getByLabel(/agreed to take a call/).check();
   await page.getByRole('button', { name: 'Add supplier' }).click();
   await expect(page.getByText(supplier.name, { exact: true })).toBeVisible();

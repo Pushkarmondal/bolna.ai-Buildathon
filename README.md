@@ -32,6 +32,15 @@ Each supplier is called in their own language: Hindi (written in Devanagari so t
 
 Bolna sends every turn to the Worker's `/v1/chat/completions` (an OpenAI-compatible custom LLM). The Worker asks Groq for the reply, cuts it into sentences, and finds every number in each, whether written as digits, Indian grouping, or Hindi or English words ("battees", "saade chaalis", "dedh sau"). A sentence goes on to Bolna only if every number is in the quote book, the order, the best offer, or what the supplier said in this call. Otherwise Bhaav says "Ek second ji, main apne notes check karta hoon" and the screen shows the block in red. A `save_quote` call is checked the same way against the supplier's last few messages.
 
+Two refinements:
+
+- **Offers must be proven.** A sentence that speaks of an offer from elsewhere ("मेरे पास … का offer है", "दूसरे supplier ने …", "other shop", "market") may only use numbers from the quote book, never one the supplier merely said. A supplier who says "the other shop said ₹70, na?" can't get Bhaav to agree. Bhaav can still read ₹70 back to them.
+- **The Desk is checked for prices only.** It talks to the buyer about their own order, so it may read back a date or quantity it is saving in the same breath. It still can't name a price nobody gave.
+
+A stopped sentence silences the rest of the reply, but not its tool calls: each tool call has its own check. If a model doesn't start answering within 2.5 seconds, the next model is asked. If an answer goes quiet for 4 seconds, Bhaav says its safe line instead of leaving silence. Groq's reasoning models are asked to think briefly (`reasoning_effort`), so the thinking doesn't eat the reply's token cap.
+
+The test bench audits every chat with a stricter rule of its own. Every number Bhaav states must be in the quote book, and only a read-back question may repeat the supplier's number. So it also flags an agreement to a planted number that uses none of the offer words.
+
 ## Layout
 
 ```text
@@ -40,12 +49,13 @@ worker/src/index.ts         Hono app: every route, plus the cron
 worker/src/llm.ts           custom LLM endpoint: model fallback + lie-catcher
 worker/src/numbers.ts       finds numbers in a sentence
 worker/src/engine.ts        landed price, best offer, round-2 list
-worker/src/dialler.ts       one call at a time: round 1 asks, round 2 bargains, round 3 confirms; limits; webhooks
+worker/src/dialler.ts       one call at a time across orders, in calling hours: round 1 asks, round 2 bargains,
+                            round 3 confirms; retries when Bolna is busy; limits; webhooks
 worker/src/prices.ts        price memory: each past order's best price per item
 worker/src/tools.ts         Bolna custom functions: update_order, start_calls, save_quote, do_not_call
 worker/src/practice.ts      "Be the supplier" personas and practice orders
 worker/src/prompts.ts       the Desk and Caller prompts
-worker/src/agents.ts        the Bolna agent configs: Desk, Caller, and the Caller as a graph agent
+worker/src/agents.ts        the Bolna agent configs: Desk, Caller, practice Caller (2 minutes), Caller as a graph agent
 worker/src/db/              Drizzle schema and the lie-catcher's database reads
 worker/migrations/          SQL migrations (quotes and events are append-only)
 web/src/                    React app: Home, Order (talk / live calls), Results, Price memory, Be the supplier, Test bench
@@ -57,7 +67,8 @@ e2e/                        Playwright tests: every journey, every link, the fit
 design-system/bhaav/        the design system (colours, type, rules) and where the code departs from it
 scripts/setup-agents.ts     registers the custom LLM and creates both Bolna agents
 scripts/fake-bolna.ts       a stand-in for Bolna's API, for running everything locally
-bench/run.ts                the test bench: simulated chats through the real lie-catcher
+bench/run.ts                the test bench: simulated chats through the real lie-catcher, audited separately
+.github/workflows/ci.yml    lint, typecheck, tests, build and the scripted bench on every push
 ```
 
 ## Run it locally (no accounts needed)
@@ -66,7 +77,7 @@ Needs Node 24 (`nvm use`).
 
 ```bash
 npm install
-cp worker/.dev.vars.example worker/.dev.vars    # fill in random values; uncomment the fake-Bolna lines
+cp worker/.dev.vars.example worker/.dev.vars    # fill in random values; uncomment the fake-Bolna and local-run lines
 npm run db:migrate:local -w worker
 npm run build
 npm run dev:worker                               # http://localhost:8787
@@ -85,7 +96,7 @@ For frontend work with hot reload, also run `npm run dev:web` and open http://lo
 ## Checks
 
 ```bash
-npm test            # 113 Worker tests (Workers runtime, local D1, faked Bolna) + 29 web tests
+npm test            # 148 Worker tests (Workers runtime, local D1, faked Bolna) + 30 web tests
 npm run typecheck   # every package, plus scripts, bench and e2e
 npm run lint
 npm run e2e         # builds, then runs 33 Playwright tests in your installed Chrome: journeys, links, fit at 9 widths, contrast
@@ -95,13 +106,14 @@ npm run bench -- --dry   # the bench harness, scripted, no network
 ## Deploy
 
 1. **Accounts** (all free to start): Cloudflare, Bolna, Groq, Sarvam. Ask Bolna in their builders' Slack to switch on the Web Call SDK. In Bolna, add your Sarvam key under *Settings → Integrations*.
-2. **Log in and create the database:**
+2. **Log in and create the database** (in India, so the Worker's reads are short):
    ```bash
    cd worker
    npx wrangler login
-   npx wrangler d1 create bhaav        # put the printed database_id in wrangler.toml
+   npx wrangler d1 create bhaav --location apac   # put the printed database_id in wrangler.toml
    npm run db:migrate:remote
    ```
+   After pulling new code, run `npm run db:migrate:remote` again before deploying: it applies any new migration once.
 3. **Secrets** (inside `worker/`). Generate each random one with `openssl rand -hex 24`:
    ```bash
    for name in GROQ_API_KEY LLM_SECRET BOLNA_API_KEY TOOL_SECRET WEBHOOK_SECRET APP_PASSCODE COOKIE_SECRET; do npx wrangler secret put $name; done
@@ -111,10 +123,10 @@ npm run bench -- --dry   # the bench harness, scripted, no network
    ```bash
    WORKER_URL=https://bhaav.<you>.workers.dev BOLNA_API_KEY=… LLM_SECRET=… TOOL_SECRET=… WEBHOOK_SECRET=… npm run agents:setup
    ```
-   Put the two printed ids in `worker/wrangler.toml` (`BOLNA_DESK_AGENT_ID`, `BOLNA_CALLER_AGENT_ID`). Add `--graph` to create the Caller as a Bolna graph agent (greet, ask, read back, bargain, confirm, close) instead of a single prompt. If Bolna refuses the API body, `npm run agents:print` writes `bolna/*-agent.json` and `bolna/*-tools.json` to paste into the dashboard instead.
-6. **Set the limits** in `worker/wrangler.toml`: `SUPPLIER_ALLOWLIST` (the numbers of suppliers who agreed) and `MAX_CALLS_PER_DAY`. Then deploy again.
+   Put the three printed ids in `worker/wrangler.toml` (`BOLNA_DESK_AGENT_ID`, `BOLNA_CALLER_AGENT_ID`, `BOLNA_PRACTICE_AGENT_ID`). Add `--graph` to create the Caller as a Bolna graph agent (greet, ask, read back, bargain, confirm, close) instead of a single prompt. If Bolna refuses the API body, `npm run agents:print` writes `bolna/*-agent.json` and `bolna/*-tools.json` to paste into the dashboard instead.
+6. **Set the limits** in `worker/wrangler.toml`. `SUPPLIER_ALLOWLIST` lists the numbers of suppliers who agreed; until it is set, no supplier can be added. Check `MAX_CALLS_PER_DAY` and `CALL_HOURS`. Then deploy again.
 7. **Test** in this order: a test call from each agent in Bolna's dashboard; Talk in the app; Be the supplier; then one real supplier who agreed.
-8. **Bench:** `GROQ_API_KEY=… npm run bench`, then `npm run build && npm run deploy -w worker` to publish the results on `/bench`.
+8. **Bench:** `GROQ_API_KEY=… npm run bench`, then `npm run build && npm run deploy -w worker` to publish the results on `/bench`. Fifty chats use more than one day of Groq's free allowance, so run them over two days, or with `BENCH_RUNS=25`.
 
 ## Settings
 
@@ -128,10 +140,13 @@ npm run bench -- --dry   # the bench harness, scripted, no network
 | `APP_PASSCODE` | secret | Opens the app |
 | `COOKIE_SECRET` | secret | Signs the session cookie |
 | `GROQ_MODELS` | var | Models to try, in order |
-| `BOLNA_DESK_AGENT_ID`, `BOLNA_CALLER_AGENT_ID` | var | From `npm run agents:setup` |
+| `BOLNA_DESK_AGENT_ID`, `BOLNA_CALLER_AGENT_ID`, `BOLNA_PRACTICE_AGENT_ID` | var | From `npm run agents:setup`; without a practice agent, practice calls use the Caller and only the browser stops them at 2 minutes |
 | `BOLNA_FROM_NUMBER` | var | Optional caller number bought in Bolna |
-| `SUPPLIER_ALLOWLIST` | var | Comma-separated numbers Bhaav may call; empty allows any |
+| `SUPPLIER_ALLOWLIST` | var | Comma-separated numbers Bhaav may call; empty allows none; `*` allows any (local fakes only) |
 | `MAX_CALLS_PER_DAY` | var | Phone calls allowed in any 24 hours (default 60) |
+| `MAX_LIVE_CALLS` | var | Phone calls live at once across every order (default 1) |
+| `CALL_HOURS` | var | Hours in India when suppliers may be called (default `10-19`); calls wait outside them |
+| `BOLNA_WEBHOOK_IPS` | var | Addresses Bolna's webhooks come from (Bolna's three, by default); `*` accepts any |
 
 ## Design
 
@@ -142,8 +157,14 @@ An Apple-style look, chosen with the [ui-ux-pro-max](https://github.com/nextleve
 - The lie-catcher checks every number before it is spoken, and every price before it is saved.
 - The Caller has no tool to accept a deal; only the buyer's Approve button can choose a supplier.
 - `quotes` and `events` are append-only: database triggers refuse any edit or delete.
-- One live phone call per order at a time, enforced by a unique index, so two dialler runs can't double-dial.
+- One live phone call per order at a time, enforced by a unique index, so two dialler runs can't double-dial; and one across all orders (`MAX_LIVE_CALLS`), so Bolna's trial limit isn't hit.
+- Suppliers are called only between 10:00 and 19:00 India time (`CALL_HOURS`); outside them, calls wait and the screen says so.
+- When Bolna refuses a call for a passing reason (busy, at its limit, a server error), the same supplier is tried again a minute later, up to three times. Only a refusal about the number itself moves on.
+- A call Bolna never reports as finished is given up after 15 minutes, so it can't hold the line forever.
+- No supplier can be added until `SUPPLIER_ALLOWLIST` lists their number: the passcode is shared with judges, so it must never let anyone dial a stranger.
 - A supplier who says "don't call" is marked on every order, and that number can't be added again.
-- Practice calls are labelled practice, capped at 30 an hour, and stopped after 2 minutes in the browser.
+- Wrong passcodes are limited: 5 per address and 500 in all, per 15 minutes (high enough that nobody can lock the judges out on purpose).
+- Browser calls (Desk and practice together) are capped at 30 an hour. Practice calls are labelled practice and run on an agent that Bolna cuts off at 2 minutes.
+- Webhooks are accepted only from Bolna's addresses, behind a secret URL. A refused or lost webhook costs a minute, not a call: the cron reads each call's status from Bolna.
 - The confirmation call is placed only after Approve, once per order, and never places the order itself.
 - A cron every minute recovers calls whose webhook never arrived.

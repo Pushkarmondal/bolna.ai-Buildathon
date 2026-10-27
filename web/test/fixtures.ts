@@ -22,6 +22,8 @@ export function call(
     transcript: null,
     createdAt: at(),
     endedAt: null,
+    attempt: 1,
+    retryable: false,
   };
 }
 
@@ -115,7 +117,8 @@ export function finishedOrder(): OrderView {
     bestQuoteId: 'q_m2',
     highestPerUnit: 36,
     missing: [],
-    history: [],
+    waitingFor: null,
+    callHours: { from: 10, to: 19 },
   };
 }
 

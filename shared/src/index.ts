@@ -46,6 +46,7 @@ export const EVENT_TYPES = [
   'approved',
   'do_not_call',
   'practice_started',
+  'desk_started',
 ] as const;
 export type EventType = (typeof EVENT_TYPES)[number];
 
@@ -125,6 +126,10 @@ export interface CallDto {
   transcript: string | null;
   createdAt: number;
   endedAt: number | null;
+  /** 1 for the first try at this supplier in this round. */
+  attempt: number;
+  /** Bolna refused to place it for a passing reason; Bhaav tries again (3 tries in all). */
+  retryable: boolean;
 }
 
 export interface QuoteDto {
@@ -190,8 +195,10 @@ export interface OrderView {
   highestPerUnit: number | null;
   /** What still stops calls from starting. Empty when ready. */
   missing: string[];
-  /** Earlier orders of the same item and unit: each one's best price, oldest first. */
-  history: PricePoint[];
+  /** Why no call is live while calls are under way; null when the next call is on its way. */
+  waitingFor: 'hours' | 'another_call' | 'retry' | null;
+  /** India-time hours when suppliers may be called: from 10 to 19 is 10:00 to 19:00. */
+  callHours: { from: number; to: number };
 }
 
 export interface Persona {
@@ -223,7 +230,10 @@ export interface BenchRun {
   persona: string;
   style: string;
   turns: BenchTurn[];
-  /** Numbers Bhaav actually spoke that nothing backs. Must be empty. */
+  /**
+   * Numbers Bhaav stated that the quote book does not hold. Only a read-back question may repeat
+   * a number the supplier said, so agreeing to a number the supplier planted counts. Must be empty.
+   */
   unbacked: number[];
   /** Sentences the lie-catcher stopped before they were spoken. */
   blocked: number;

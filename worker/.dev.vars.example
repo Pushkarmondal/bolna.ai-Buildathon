@@ -25,3 +25,10 @@ COOKIE_SECRET=
 # GROQ_BASE_URL=http://localhost:8790/groq
 # Local runs against the fake Bolna place many pretend calls; lift the daily cap (real deploys keep wrangler.toml's 60).
 # MAX_CALLS_PER_DAY=100000
+# Local runs also allow any pretend number, any hour, webhooks from localhost, and calls for
+# several orders at once (a call left live by a stopped test would otherwise hold up the rest).
+# Real deploys keep wrangler.toml's values: an approved list, 10:00-19:00, Bolna's addresses, one call.
+# SUPPLIER_ALLOWLIST=*
+# CALL_HOURS=0-24
+# BOLNA_WEBHOOK_IPS=*
+# MAX_LIVE_CALLS=100

@@ -324,10 +324,12 @@ function SuppliersCard({ view }: { view: OrderView }) {
   const [phone, setPhone] = useState('');
   const [language, setLanguage] = useState<(typeof LANGUAGES)[number]>('hi');
   const [agreed, setAgreed] = useState(false);
+  const [howAgreed, setHowAgreed] = useState('');
   const [errors, setErrors] = useState<{
     name?: string;
     phone?: string;
     agreed?: string;
+    howAgreed?: string;
     form?: string;
   }>({});
   const [busy, setBusy] = useState(false);
@@ -337,17 +339,19 @@ function SuppliersCard({ view }: { view: OrderView }) {
     const next: typeof errors = {};
     if (!name.trim()) next.name = 'Add the supplier’s name.';
     if (!phone.trim()) next.phone = 'Add a 10-digit mobile number.';
+    if (!howAgreed.trim()) next.howAgreed = 'Note how they agreed, for your records.';
     if (!agreed) next.agreed = 'Bhaav only calls suppliers who agreed to take its call.';
     setErrors(next);
     if (Object.keys(next).length > 0) return;
     setBusy(true);
     try {
       const updated = await api<OrderView>(`/api/requests/${view.order.id}/suppliers`, {
-        json: { name, phone, language, consentNote: "Agreed to take Bhaav's call" },
+        json: { name, phone, language, consentNote: howAgreed.trim() },
       });
       setView(updated);
       setName('');
       setPhone('');
+      setHowAgreed('');
       setAgreed(false);
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Could not add the supplier.';
@@ -440,6 +444,20 @@ function SuppliersCard({ view }: { view: OrderView }) {
               </option>
             ))}
           </select>
+        </Field>
+        <Field
+          id="supplier-consent"
+          label="How they agreed"
+          hint="For your records, e.g. 'said yes on WhatsApp, 21 Oct'"
+          error={errors.howAgreed}
+        >
+          <input
+            className={inputClass}
+            maxLength={200}
+            value={howAgreed}
+            onChange={(e) => setHowAgreed(e.target.value)}
+            {...fieldProps('supplier-consent', { hint: true, error: errors.howAgreed })}
+          />
         </Field>
         <div>
           <label
@@ -542,6 +560,28 @@ const STAGE: Record<string, { label: string; tone: Tone }> = {
 
 const ROUND_NAMES: Record<number, string> = { 1: 'Ask', 2: 'Bargain', 3: 'Confirm' };
 
+/** Each round's latest try only: a call Bolna was too busy to place is tried again. */
+function latestPerRound(calls: OrderView['calls']): OrderView['calls'] {
+  const byRound = new Map<number, OrderView['calls'][number]>();
+  for (const c of calls) byRound.set(c.round, c);
+  return [...byRound.values()];
+}
+
+/** Why no call is live while calls are under way, in one sentence. */
+function waitingSentence(view: OrderView): string | null {
+  const { from, to } = view.callHours;
+  switch (view.waitingFor) {
+    case 'hours':
+      return `Suppliers are called only between ${from}:00 and ${to}:00 India time, so the next call starts at ${from}:00.`;
+    case 'another_call':
+      return 'Bhaav is on a call for another order. The next call here starts as soon as that one ends.';
+    case 'retry':
+      return 'Bolna was busy, so Bhaav will try that call again in a minute.';
+    default:
+      return null;
+  }
+}
+
 function LiveCalls({ view, desk }: { view: OrderView; desk: WebCall }) {
   const o = view.order;
   const stage = STAGE[o.status] ?? { label: o.status, tone: 'neutral' as const };
@@ -587,6 +627,14 @@ function LiveCalls({ view, desk }: { view: OrderView; desk: WebCall }) {
         </div>
       )}
 
+      {working && !liveCall && waitingSentence(view) && (
+        <div className="mb-4">
+          <Notice tone="info" title="Waiting">
+            {waitingSentence(view)}
+          </Notice>
+        </div>
+      )}
+
       {!working &&
         (o.status === 'done' && view.quotes.length === 0 ? (
           // Finished with nothing to choose from: say why, not "every call is finished".
@@ -613,7 +661,7 @@ function LiveCalls({ view, desk }: { view: OrderView; desk: WebCall }) {
           <Card title="Calls" icon={PhoneCall}>
             <ul className="divide-y divide-border">
               {callable.map((s) => {
-                const own = view.calls.filter((c) => c.supplierId === s.id);
+                const own = latestPerRound(view.calls.filter((c) => c.supplierId === s.id));
                 const latest = [...view.quotes].reverse().find((q) => q.supplierId === s.id);
                 return (
                   <li
@@ -642,7 +690,10 @@ function LiveCalls({ view, desk }: { view: OrderView; desk: WebCall }) {
                           }
                           pulse={isLive(c.status)}
                         >
-                          {ROUND_NAMES[c.round] ?? `Round ${c.round}`}: {callLabel(c.status)}
+                          {ROUND_NAMES[c.round] ?? `Round ${c.round}`}:{' '}
+                          {c.status === 'failed' && c.retryable
+                            ? 'Bolna busy, trying again'
+                            : callLabel(c.status)}
                         </Pill>
                       ))}
                       {s.doNotCall && <Pill tone="danger">Asked not to be called</Pill>}
@@ -769,8 +820,9 @@ function LieCatcher({ view }: { view: OrderView }) {
         aside={<Pill tone={blocked.length ? 'danger' : 'success'}>{blocked.length} stopped</Pill>}
       >
         <p className="text-muted-fg">
-          Before Bhaav says anything, every number is checked against the quote book and what the
-          supplier just said. A number it can't prove is never spoken.
+          Before Bhaav says anything, every number is checked. It may read back what the supplier
+          said, but any offer it mentions must be in the quote book. A number it can't prove is
+          never spoken.
         </p>
         {blocked.length > 0 && (
           <ul className="mt-4 flex flex-col gap-2">

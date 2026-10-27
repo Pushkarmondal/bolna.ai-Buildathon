@@ -233,7 +233,8 @@ const customLlm = (setup: AgentSetup) => ({
   model: setup.llmModel,
   base_url: `${setup.workerUrl}/v1`,
   family: 'openai',
-  max_tokens: 200,
+  // Room for a reasoning model's short thinking as well as the reply; replies stay short anyway.
+  max_tokens: 400,
   temperature: 0.3,
 });
 
@@ -340,15 +341,33 @@ ${VOICE_RULES}`;
 
 // ---- Agent bodies ------------------------------------------------------------------------------
 
-export type AgentKind = 'desk' | 'caller' | 'caller-graph';
+export type AgentKind = 'desk' | 'caller' | 'caller-graph' | 'practice';
 
-/** The POST /v2/agent body for the Desk (talks to the buyer) or the Caller (phones suppliers). */
+const AGENT_NAMES: Record<AgentKind, string> = {
+  desk: 'Bhaav Desk',
+  caller: 'Bhaav Caller',
+  'caller-graph': 'Bhaav Caller (graph)',
+  practice: 'Bhaav Practice Caller',
+};
+
+/** Seconds before Bolna hangs up: four minutes a supplier call, two for a judge's practice call. */
+const CALL_SECONDS: Record<AgentKind, number> = {
+  desk: 300,
+  caller: 240,
+  'caller-graph': 240,
+  practice: 120,
+};
+
+/**
+ * The POST /v2/agent body for the Desk (talks to the buyer), the Caller (phones suppliers), or
+ * the practice Caller (the same Caller, cut off at two minutes, for "Be the supplier").
+ */
 export function agentBody(kind: AgentKind, setup: AgentSetup) {
   const desk = kind === 'desk';
   const graph = kind === 'caller-graph';
   return {
     agent_config: {
-      agent_name: desk ? 'Bhaav Desk' : graph ? 'Bhaav Caller (graph)' : 'Bhaav Caller',
+      agent_name: AGENT_NAMES[kind],
       agent_welcome_message: desk ? DESK_WELCOME : CALLER_WELCOME,
       webhook_url: `${setup.workerUrl}/webhooks/bolna/${setup.webhookSecret}`,
       tasks: [
@@ -375,8 +394,8 @@ export function agentBody(kind: AgentKind, setup: AgentSetup) {
             api_tools: apiTools(desk ? DESK_TOOLS : CALLER_TOOLS, setup),
           },
           task_config: {
-            // Four minutes a call (the Bhaav promise), and hang up on long silence.
-            call_terminate: desk ? 300 : 240,
+            // Four minutes a call (the Bhaav promise), two for practice, and hang up on long silence.
+            call_terminate: CALL_SECONDS[kind],
             hangup_after_silence: 15,
           },
         },

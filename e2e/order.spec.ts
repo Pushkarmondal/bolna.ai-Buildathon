@@ -33,10 +33,11 @@ test('a buyer orders, Bhaav calls and bargains, and the buyer chooses', async ({
   await page.getByLabel('How much').fill('50');
   await expect(page.getByText('Use a number above zero, like 50.')).toBeHidden();
 
-  // Without consent, a supplier is not added, and the error sits by the checkbox.
+  // Without consent, a supplier is not added: the errors sit by the note and the checkbox.
   await page.getByLabel('Name', { exact: true }).fill('No Consent Traders');
   await page.getByLabel('Mobile number').fill('98000 00099');
   await page.getByRole('button', { name: 'Add supplier' }).click();
+  await expect(page.getByText('Note how they agreed, for your records.')).toBeVisible();
   await expect(
     page.getByText('Bhaav only calls suppliers who agreed to take its call.'),
   ).toBeVisible();

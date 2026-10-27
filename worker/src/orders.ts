@@ -14,7 +14,6 @@ import {
   suppliers,
 } from './db/schema';
 import { landedPrice, UNIT_WORDS } from './engine';
-import { historyFor } from './prices';
 
 const UNIT_SYNONYMS: Record<string, Unit> = {};
 const synonyms: Array<[Unit, string]> = [
@@ -30,10 +29,20 @@ const synonyms: Array<[Unit, string]> = [
 ];
 for (const [unit, words] of synonyms) for (const w of words.split(' ')) UNIT_SYNONYMS[w] = unit;
 
-/** "Kilo", "kgs", "किलो" all become kg; null when the word is not a unit we know. */
+/**
+ * "Kilo", "kgs", "किलो", "per kg", "/kg" and "1 kg" all become kg; null when the word is not a
+ * unit we know.
+ */
 export function normalizeUnit(value: string | null | undefined): Unit | null {
   if (!value) return null;
-  return UNIT_SYNONYMS[value.trim().toLowerCase().normalize('NFC')] ?? null;
+  const word = value
+    .trim()
+    .toLowerCase()
+    .normalize('NFC')
+    .replace(/^(?:per|prati|प्रति|a|an|one|1|ek|एक)\s+/u, '')
+    .replace(/^\/\s*/, '')
+    .replace(/[.\s]+$/, '');
+  return UNIT_SYNONYMS[word] ?? null;
 }
 
 /** Indian mobile numbers become E.164 (+91…); anything else must already start with +. */
@@ -67,6 +76,23 @@ export function indiaToday(now = Date.now()): string {
 
 /** True when a YYYY-MM-DD delivery date is before today in India. */
 export const isPastDate = (iso: string, now = Date.now()) => iso < indiaToday(now);
+
+/**
+ * Today in India for the Desk's prompt, with the weekday, so "Friday tak" becomes a real date:
+ * "Tuesday 27 October 2026 (2026-10-27)".
+ */
+export function todayWords(now = Date.now()): string {
+  const words = new Intl.DateTimeFormat('en-IN', {
+    weekday: 'long',
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+    timeZone: 'Asia/Kolkata',
+  })
+    .format(new Date(now))
+    .replace(/,/g, '');
+  return `${words} (${indiaToday(now)})`;
+}
 
 /** "Friday, 23 October" for prompts and screens. */
 export function dateWords(iso: string | null): string {
@@ -224,6 +250,8 @@ export async function orderView(db: Db, requestId: string): Promise<OrderView | 
       transcript: c.transcript,
       createdAt: c.createdAt.getTime(),
       endedAt: ms(c.endedAt),
+      attempt: c.attempt,
+      retryable: c.retryable,
     })),
     quotes: quoteRows.map((q) => ({
       id: q.id,
@@ -255,6 +283,8 @@ export async function orderView(db: Db, requestId: string): Promise<OrderView | 
       request.status === 'draft'
         ? missingFor(request, supplierRows.filter((s) => !s.doNotCall).length)
         : [],
-    history: request.isPractice ? [] : await historyFor(db, request),
+    // The routes fill these in from the dialler's settings (index.ts, viewOf).
+    waitingFor: null,
+    callHours: { from: 10, to: 19 },
   };
 }

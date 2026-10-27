@@ -100,11 +100,19 @@ export async function saveQuote(db: Db, params: Params): Promise<ToolResult> {
   if (!request) return { ok: false, message: 'Could not save: the order is missing.' };
 
   const price = numberParam(params, 'price');
-  const unit: Unit | null = normalizeUnit(param(params, 'unit')) ?? request.unit;
+  // A unit it can't read is asked about, never swapped for the order's: ₹1,600 a quintal saved
+  // as ₹1,600 a kilo would be a wrong quote. Only a missing unit means the order's own.
+  const unitWord = param(params, 'unit');
+  const unit: Unit | null = unitWord ? normalizeUnit(unitWord) : request.unit;
   const supplierWords = param(params, 'supplier_words');
   if (price === undefined || price <= 0)
     return { ok: false, message: 'Not saved: ask for the price again.' };
-  if (!unit) return { ok: false, message: 'Not saved: ask which unit the price is for.' };
+  if (!unit)
+    return {
+      ok: false,
+      message:
+        'Not saved: ask which unit the price is for (kilo, litre, piece, dozen, quintal or pack).',
+    };
   if (!supplierWords) return { ok: false, message: "Not saved: include the supplier's own words." };
 
   const packUnit = normalizeUnit(param(params, 'pack_unit'));

@@ -23,6 +23,15 @@ describe('choiceOf', () => {
     expect(choice?.changed).toBeNull();
   });
 
+  it('follows the latest try when Bolna was too busy to place the first', () => {
+    const view = approvedOrder();
+    view.calls.push(
+      { ...call('call_m3a', 'sup_m', 3, 'failed'), retryable: true },
+      { ...call('call_m3b', 'sup_m', 3, 'in-progress'), attempt: 2 },
+    );
+    expect(choiceOf(view)?.confirmCall?.id).toBe('call_m3b');
+  });
+
   it('reports nothing changed when the supplier repeated the same terms', () => {
     const view = approvedOrder();
     view.calls.push(call('call_m3', 'sup_m', 3));

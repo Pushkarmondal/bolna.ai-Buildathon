@@ -23,6 +23,12 @@ export default defineConfig(async () => {
             BOLNA_BASE_URL: 'https://bolna.test',
             BOLNA_DESK_AGENT_ID: 'agent-desk',
             BOLNA_CALLER_AGENT_ID: 'agent-caller',
+            // The flow tests share one database and leave calls live, and run at any hour; the
+            // dialler's own tests set these limits explicitly.
+            SUPPLIER_ALLOWLIST: '*',
+            CALL_HOURS: '0-24',
+            MAX_LIVE_CALLS: '1000',
+            BOLNA_WEBHOOK_IPS: '*',
           },
         },
       }),

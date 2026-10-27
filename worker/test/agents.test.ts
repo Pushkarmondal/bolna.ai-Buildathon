@@ -73,6 +73,24 @@ describe('prompts', () => {
     const used = new Set([...CALLER_PROMPT.matchAll(/\{([a-z_]+)\}/g)].map((m) => m[1]));
     expect([...used].sort()).toEqual([...sent].sort());
   });
+
+  it("give the Desk today's date, which the Worker sends when it starts the call", () => {
+    const used = new Set([...DESK_PROMPT.matchAll(/\{([a-z_]+)\}/g)].map((m) => m[1]));
+    expect([...used].sort()).toEqual(['buyer_name', 'request_ref', 'today']);
+  });
+});
+
+describe('the practice agent', () => {
+  it('is the Caller, cut off at two minutes', () => {
+    const practice = agentBody('practice', setup);
+    const caller = agentBody('caller', setup);
+    expect(practice.agent_config.agent_name).toBe('Bhaav Practice Caller');
+    expect(practice.agent_config.tasks[0]?.task_config.call_terminate).toBe(120);
+    expect(practice.agent_prompts).toEqual(caller.agent_prompts);
+    expect(practice.agent_config.tasks[0]?.tools_config.api_tools).toEqual(
+      caller.agent_config.tasks[0]?.tools_config.api_tools,
+    );
+  });
 });
 
 describe('languages', () => {

@@ -1,4 +1,4 @@
-import type { OrderView, Persona, PriceSeries } from '@bhaav/shared';
+import type { OrderView, Persona, PricePoint, PriceSeries } from '@bhaav/shared';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useCallback } from 'react';
 import { isLive } from './format';
@@ -91,6 +91,18 @@ export function useApplyOrder(id: string) {
     },
     [queryClient, id],
   );
+}
+
+/**
+ * An order's "last time" prices. Asked once, never polled: it only changes when another order of
+ * the same item finishes, and reading it scans past quotes.
+ */
+export function useHistory(id: string) {
+  return useQuery({
+    queryKey: ['history', id],
+    queryFn: () => api<PricePoint[]>(`/api/requests/${id}/history`),
+    staleTime: Number.POSITIVE_INFINITY,
+  });
 }
 
 export function usePrices() {

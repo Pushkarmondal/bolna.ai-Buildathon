@@ -27,13 +27,24 @@ BOLNA_BASE_URL = "https://api.bolna.ai"
 # Printed by `npm run agents:setup`; paste them here.
 BOLNA_DESK_AGENT_ID = ""
 BOLNA_CALLER_AGENT_ID = ""
+# The Caller again, cut off at 2 minutes, for judges' practice calls. Empty uses the Caller.
+BOLNA_PRACTICE_AGENT_ID = ""
 # Optional: a number bought in Bolna. Empty uses Bolna's default number.
 BOLNA_FROM_NUMBER = ""
 # Comma-separated E.164 numbers Bhaav may call (e.g. "+919800000001,+919800000002").
-# Empty allows any number. Set it before topping up Bolna, so nobody can make Bhaav call a stranger.
+# Empty allows none, so nobody with the passcode can make Bhaav call a stranger. "*" allows any
+# number: only for local runs against the fake Bolna.
 SUPPLIER_ALLOWLIST = ""
 # A ceiling on phone calls in any 24 hours, to protect the credit.
 MAX_CALLS_PER_DAY = "60"
+# Phone calls live at once across every order. Bolna's trial allows 2, and a browser call may
+# hold one of them.
+MAX_LIVE_CALLS = "1"
+# Hours in India time when suppliers may be called ("10-19" is 10:00 to 19:00). Calls wait
+# outside them.
+CALL_HOURS = "10-19"
+# Where Bolna's webhooks come from (Bolna's docs). Others are refused; "*" accepts any.
+BOLNA_WEBHOOK_IPS = "13.203.39.153,13.126.9.249,13.202.133.53"
 
 [observability]
 enabled = true

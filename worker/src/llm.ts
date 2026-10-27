@@ -3,6 +3,13 @@
 
 import { allowedSet, numbersIn, parseAmount, unbackedNumbers } from './numbers';
 
+/** How long one model may take to start answering before the next one is asked. */
+const FIRST_BYTE_MS = 2500;
+/** How long an answer may go quiet mid-stream before Bhaav gives up on it. */
+const STALL_MS = 4000;
+/** Room for the reply after a reasoning model's thinking, which counts against the same cap. */
+const MIN_REPLY_TOKENS = 400;
+
 export interface ChatMessage {
   role: string;
   content?: unknown;
@@ -26,8 +33,8 @@ export type CatcherEvent =
   | { type: 'upstream_down'; callRef: string | null; statuses: number[] };
 
 export interface CatcherDeps {
-  /** Sends one OpenAI-style chat-completions request upstream (Groq). */
-  upstream: (body: ChatRequest) => Promise<Response>;
+  /** Sends one OpenAI-style chat-completions request upstream (Groq); the signal cancels it. */
+  upstream: (body: ChatRequest, signal: AbortSignal) => Promise<Response>;
   /** Tried in order; the next one is used when one fails. */
   models: readonly string[];
   /** Numbers this call may state: the quote book, the order and the best offer. */
@@ -36,6 +43,9 @@ export interface CatcherDeps {
   waitUntil?: (promise: Promise<unknown>) => void;
   /** Non-system messages sent upstream; older turns are dropped. */
   historyLimit?: number;
+  /** Overrides FIRST_BYTE_MS and STALL_MS (tests). */
+  firstByteMs?: number;
+  stallMs?: number;
 }
 
 export const SAFE_LINE = 'Ek second ji, main apne notes check karta hoon.';
@@ -60,12 +70,82 @@ export function textOf(content: unknown): string {
 
 /**
  * The Caller's prompt carries `CALL_REF: <call id>` and the Desk's `REQUEST_REF: <order id>`,
- * both filled in from user_data when Bolna starts the call.
+ * both filled in from user_data when Bolna starts the call. An empty one (Bolna leaves an unknown
+ * variable blank) is no reference, not the next line's first word.
  */
 export function callRefOf(messages: readonly ChatMessage[]): string | null {
   const system = messages.find((m) => m.role === 'system');
-  const match = /(?:CALL|REQUEST)_REF:\s*([A-Za-z0-9_-]+)/.exec(textOf(system?.content));
+  const match = /(?:CALL|REQUEST)_REF:[ \t]*((?:call|req)_[A-Za-z0-9]+)/.exec(
+    textOf(system?.content),
+  );
   return match?.[1] ?? null;
+}
+
+/** Lower case, NFC, and without the Devanagari marks speech-to-text often drops (ऑफ़र is ऑफर). */
+const wordKey = (word: string) =>
+  word
+    .normalize('NFC')
+    .toLowerCase()
+    .replace(/[\u0901\u0902\u093C]/g, '');
+
+const OFFER_WORDS = new Set(
+  [
+    'offer offers offered other another elsewhere competitor competitors market',
+    'doosre dusre doosri dusri doosra dusra mila mili bazaar bazar',
+    'ऑफर ऑफ़र आफर दूसरे दूसरी दूसरा मिला मिली बाज़ार बाजार मार्केट',
+    'ಆಫರ್ ಬೇರೆ',
+  ]
+    .join(' ')
+    .split(' ')
+    .map(wordKey),
+);
+const OFFER_PHRASES = [
+  ['मेरे', 'पास'],
+  ['mere', 'paas'],
+  ['mere', 'pas'],
+  ['कोई', 'और'],
+  ['koi', 'aur'],
+  ['सबसे', 'कम'],
+  ['sabse', 'kam'],
+].map(([a = '', b = '']) => [wordKey(a), wordKey(b)] as const);
+
+/**
+ * Whether a sentence speaks of an offer from somewhere else ("मेरे पास ₹31 का offer है",
+ * "दूसरे supplier ने ₹30 बोला"). Such a sentence may only use numbers Bhaav can prove from the quote
+ * book. Otherwise a supplier who says "the other shop said ₹70, na?" could get Bhaav to agree,
+ * because ₹70 is a number the supplier said.
+ */
+export function claimsAnOffer(sentence: string): boolean {
+  const words = (sentence.normalize('NFC').match(/[\p{L}\p{M}]+/gu) ?? []).map(wordKey);
+  return words.some(
+    (word, i) =>
+      OFFER_WORDS.has(word) || OFFER_PHRASES.some(([a, b]) => word === a && words[i + 1] === b),
+  );
+}
+
+/**
+ * Groq's reasoning models think before they answer. On a phone call that costs time, and the
+ * thinking counts against the same token cap as the answer, so keep it short or off.
+ */
+export function modelParams(model: string): Record<string, unknown> {
+  if (model.startsWith('openai/gpt-oss'))
+    return { reasoning_effort: 'low', include_reasoning: false };
+  // Qwen answers with tools only when its reasoning is parsed or hidden, never inline.
+  if (model.startsWith('qwen/')) return { reasoning_effort: 'none', reasoning_format: 'hidden' };
+  return {};
+}
+
+/** Resolves with the read, or rejects once the stream has been quiet for `ms`. */
+async function readWithin<T>(read: Promise<T>, ms: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const quiet = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error('the model stopped mid-answer')), ms);
+  });
+  try {
+    return await Promise.race([read, quiet]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
 }
 
 /** System messages plus the last `limit` others, never starting on an orphaned tool result. */
@@ -174,8 +254,11 @@ function sseResponse(body: ReadableStream<Uint8Array>): Response {
 /** Handles one chat-completions request from Bolna and returns the checked reply as an SSE stream. */
 export async function catchLies(req: ChatRequest, deps: CatcherDeps): Promise<Response> {
   const callRef = callRefOf(req.messages);
+  // The Desk talks to the buyer about their own order, so only prices are checked there; dates
+  // and quantities it reads back may not be saved yet.
+  const desk = callRef?.startsWith('req_') ?? false;
   const userTexts = req.messages.filter((m) => m.role === 'user').map((m) => textOf(m.content));
-  const fromSupplier = userTexts.flatMap(numbersIn);
+  const heard = userTexts.flatMap(numbersIn);
   // Read the quote book while Groq starts on the reply. A failed read allows fewer numbers, not more.
   const bookNumbers = Promise.resolve()
     .then(() => deps.allowedFor(callRef))
@@ -190,11 +273,13 @@ export async function catchLies(req: ChatRequest, deps: CatcherDeps): Promise<Re
     deps.waitUntil?.(pending);
   };
 
-  const { stream_options: _ignored, ...rest } = req;
+  const { stream_options: _ignored, max_completion_tokens: _cap, ...rest } = req;
+  const asked = Number(req.max_tokens ?? req.max_completion_tokens) || 0;
   const body: ChatRequest = {
     ...rest,
     messages: trimHistory(req.messages, deps.historyLimit ?? 8),
     stream: true,
+    max_tokens: Math.max(asked, MIN_REPLY_TOKENS),
   };
 
   let upstream: Response | null = null;
@@ -202,8 +287,14 @@ export async function catchLies(req: ChatRequest, deps: CatcherDeps): Promise<Re
   const statuses: number[] = [];
   for (const candidate of deps.models) {
     let status = 0;
+    // A model that hangs would leave the phone silent, so it gets a deadline to start answering.
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), deps.firstByteMs ?? FIRST_BYTE_MS);
     try {
-      const res = await deps.upstream({ ...body, model: candidate });
+      const res = await deps.upstream(
+        { ...body, ...modelParams(candidate), model: candidate },
+        controller.signal,
+      );
       if (res.ok && res.body) {
         upstream = res;
         model = candidate;
@@ -212,7 +303,9 @@ export async function catchLies(req: ChatRequest, deps: CatcherDeps): Promise<Re
       status = res.status;
       res.body?.cancel().catch(() => undefined);
     } catch {
-      status = 0;
+      status = controller.signal.aborted ? 408 : 0;
+    } finally {
+      clearTimeout(timer);
     }
     statuses.push(status);
     record({ type: 'model_switch', callRef, model: candidate, status });
@@ -224,8 +317,12 @@ export async function catchLies(req: ChatRequest, deps: CatcherDeps): Promise<Re
     return sseResponse(sse.single(SAFE_LINE));
   }
 
-  const allowed = allowedSet([...(await bookNumbers), ...fromSupplier]);
+  const book = await bookNumbers;
+  // Numbers Bhaav can prove from the quote book, and those plus what the other person said.
+  const proven = allowedSet(book);
+  const allowed = allowedSet([...book, ...heard]);
   const reader = upstream.body.pipeThrough(new TextDecoderStream()).getReader();
+  const stallMs = deps.stallMs ?? STALL_MS;
 
   return sseResponse(
     new ReadableStream<Uint8Array>({
@@ -243,7 +340,8 @@ export async function catchLies(req: ChatRequest, deps: CatcherDeps): Promise<Re
         };
         const say = (sentence: string) => {
           if (muted || sentence.trim() === '') return;
-          const bad = unbackedNumbers(sentence, allowed);
+          const found = unbackedNumbers(sentence, claimsAnOffer(sentence) ? proven : allowed);
+          const bad = desk ? found.filter((n) => n.price) : found;
           if (bad.length > 0) {
             muted = true;
             emit({ content: SAFE_LINE });
@@ -260,7 +358,7 @@ export async function catchLies(req: ChatRequest, deps: CatcherDeps): Promise<Re
 
         try {
           read: while (true) {
-            const { value, done } = await reader.read();
+            const { value, done } = await readWithin(reader.read(), stallMs);
             // A final line without its newline still counts.
             lines += done ? '\n' : value;
             let newline = lines.indexOf('\n');
@@ -296,26 +394,28 @@ export async function catchLies(req: ChatRequest, deps: CatcherDeps): Promise<Re
           }
           say(text);
 
+          // A stopped sentence silences the rest of the words, not the tool calls: each has its
+          // own check (a save_quote price must be one the supplier said), and dropping the Desk's
+          // update_order would lose what the buyer just said.
           if (toolDeltas.length > 0) {
-            if (muted) {
+            const bad = assembleToolCalls(toolDeltas).find(
+              (call) => call.name === 'save_quote' && !quoteIsBacked(call.arguments, recent),
+            );
+            if (bad) {
+              if (!muted) emit({ content: REPEAT_LINE });
+              record({ type: 'tool_blocked', callRef, tool: bad.name, arguments: bad.arguments });
               finish = 'stop';
             } else {
-              const bad = assembleToolCalls(toolDeltas).find(
-                (call) => call.name === 'save_quote' && !quoteIsBacked(call.arguments, recent),
-              );
-              if (bad) {
-                emit({ content: REPEAT_LINE });
-                record({ type: 'tool_blocked', callRef, tool: bad.name, arguments: bad.arguments });
-                finish = 'stop';
-              } else {
-                for (const toolCalls of toolDeltas) emit({ tool_calls: toolCalls });
-                finish = 'tool_calls';
-              }
+              for (const toolCalls of toolDeltas) emit({ tool_calls: toolCalls });
+              finish = 'tool_calls';
             }
           } else if (finish === 'tool_calls') {
             finish = 'stop';
           }
         } catch {
+          // The model failed or went quiet mid-answer.
+          reader.cancel().catch(() => undefined);
+          record({ type: 'upstream_down', callRef, statuses: [408] });
           if (!muted) emit({ content: SAFE_LINE });
           finish = 'stop';
         }

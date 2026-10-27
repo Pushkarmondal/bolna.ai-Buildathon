@@ -1,5 +1,6 @@
-// The five tables. `quotes` and `events` are append-only: triggers in the migrations refuse
-// UPDATE and DELETE, so the record of what Bhaav heard and said can be trusted.
+// The five tables of an order, plus wrong passcodes. `quotes` and `events` are append-only:
+// triggers in the migrations refuse UPDATE and DELETE, so the record of what Bhaav heard and said
+// can be trusted.
 
 import { CALL_STATUSES, EVENT_TYPES, REQUEST_STATUSES, UNITS } from '@bhaav/shared';
 import { sql } from 'drizzle-orm';
@@ -11,21 +12,26 @@ const createdAt = () =>
     .notNull()
     .$defaultFn(() => new Date());
 
-export const requests = sqliteTable('requests', {
-  id: id(),
-  buyerName: text('buyer_name'),
-  item: text('item'),
-  quantity: real('quantity'),
-  unit: text('unit', { enum: UNITS }),
-  quality: text('quality'),
-  /** ISO date, YYYY-MM-DD */
-  deliverBy: text('deliver_by'),
-  area: text('area'),
-  status: text('status', { enum: REQUEST_STATUSES }).notNull().default('draft'),
-  approvedQuoteId: text('approved_quote_id'),
-  isPractice: integer('is_practice', { mode: 'boolean' }).notNull().default(false),
-  createdAt: createdAt(),
-});
+export const requests = sqliteTable(
+  'requests',
+  {
+    id: id(),
+    buyerName: text('buyer_name'),
+    item: text('item'),
+    quantity: real('quantity'),
+    unit: text('unit', { enum: UNITS }),
+    quality: text('quality'),
+    /** ISO date, YYYY-MM-DD */
+    deliverBy: text('deliver_by'),
+    area: text('area'),
+    status: text('status', { enum: REQUEST_STATUSES }).notNull().default('draft'),
+    approvedQuoteId: text('approved_quote_id'),
+    isPractice: integer('is_practice', { mode: 'boolean' }).notNull().default(false),
+    createdAt: createdAt(),
+  },
+  // Price memory finds earlier orders of the same item by this key, without reading every quote.
+  (t) => [index('requests_item_key_idx').on(sql`lower(trim(${t.item}))`, t.unit)],
+);
 
 export const suppliers = sqliteTable(
   'suppliers',
@@ -68,14 +74,18 @@ export const calls = sqliteTable(
     endedAt: integer('ended_at', { mode: 'timestamp_ms' }),
     recordingUrl: text('recording_url'),
     transcript: text('transcript'),
+    /** 1 for the first try; a dial Bolna refused for a passing reason is tried again, up to 3. */
+    attempt: integer('attempt').notNull().default(1),
+    /** Set when Bolna refused to place the call for a passing reason (busy, at its call limit). */
+    retryable: integer('retryable', { mode: 'boolean' }).notNull().default(false),
     createdAt: createdAt(),
   },
   (t) => [
     index('calls_request_idx').on(t.requestId),
     index('calls_execution_idx').on(t.bolnaExecutionId),
-    // One call per supplier per round, and one live phone call per order at a time: two
-    // dialler runs racing each other cannot both dial.
-    uniqueIndex('calls_one_per_round').on(t.requestId, t.supplierId, t.round),
+    // One call per supplier, round and attempt, and one live phone call per order at a time:
+    // two dialler runs racing each other cannot both dial.
+    uniqueIndex('calls_one_per_round').on(t.requestId, t.supplierId, t.round, t.attempt),
     uniqueIndex('calls_one_live_per_order')
       .on(t.requestId)
       .where(
@@ -126,6 +136,17 @@ export const events = sqliteTable(
     createdAt: createdAt(),
   },
   (t) => [index('events_request_idx').on(t.requestId), index('events_call_idx').on(t.callId)],
+);
+
+/** Wrong passcodes, so guessing can be slowed down. Holds a hash of the address, never the address. */
+export const loginAttempts = sqliteTable(
+  'login_attempts',
+  {
+    id: id(),
+    ipHash: text('ip_hash').notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [index('login_attempts_created_idx').on(t.createdAt)],
 );
 
 export type RequestRow = typeof requests.$inferSelect;

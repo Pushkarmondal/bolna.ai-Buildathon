@@ -4,7 +4,7 @@
 
 import { LANGUAGES } from '@bhaav/shared';
 import { zValidator } from '@hono/zod-validator';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, gte, lt } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/d1';
 import { type Context, Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
@@ -20,33 +20,81 @@ import {
 } from './auth';
 import { type Execution, findCallRef, getExecution, mintWebSession } from './bolna';
 import { allowedNumbersFor, type Db, recordEvent } from './db/context';
-import { calls, events, quotes, requests, suppliers } from './db/schema';
+import { calls, events, loginAttempts, quotes, requests, suppliers } from './db/schema';
 import {
   advance,
+  advanceWaiting,
   applyExecution,
   callerUserData,
   confirmChoice,
   diallerEnv,
   failOrphanedCalls,
+  giveUpOnStuckCalls,
+  inCallHours,
+  mayCall,
   parseAllowlist,
   staleCalls,
-  stalledRequests,
+  waitingReason,
 } from './dialler';
 import { newId } from './ids';
 import { type ChatRequest, catchLies } from './llm';
-import { isPastDate, normalizeDate, normalizePhone, normalizeUnit, orderView } from './orders';
+import {
+  isPastDate,
+  normalizeDate,
+  normalizePhone,
+  normalizeUnit,
+  orderView,
+  todayWords,
+} from './orders';
 import {
   createPractice,
   PERSONAS,
-  PRACTICE_PER_HOUR,
   personaCards,
-  practiceCallsLastHour,
+  WEB_CALLS_PER_HOUR,
+  webCallsLastHour,
 } from './practice';
-import { priceSeries } from './prices';
+import { historyFor, priceSeries } from './prices';
 import { doNotCall, type Params, saveQuote, startOrder, updateOrder } from './tools';
 
 type Env = { Bindings: Cloudflare.Env };
 const dbOf = (c: Context<Env>): Db => drizzle(c.env.DB);
+
+/** An order for the screens, with why it is waiting (calling hours, another call, a retry). */
+async function viewOf(c: Context<Env>, db: Db, id: string) {
+  const view = await orderView(db, id);
+  if (!view) return null;
+  const dialler = diallerEnv(c.env);
+  view.waitingFor = await waitingReason(dialler, db, view.order, view.calls);
+  view.callHours = dialler.callHours;
+  return view;
+}
+
+/** Wrong passcodes allowed per address, and from everyone together, in each window. */
+const LOGIN_WINDOW_MS = 15 * 60_000;
+const LOGIN_TRIES_PER_ADDRESS = 5;
+const LOGIN_TRIES_IN_ALL = 500;
+
+/** A salted hash of the caller's address: enough to count tries, useless for finding anyone. */
+async function addressHash(c: Context<Env>): Promise<string> {
+  const address = c.req.header('cf-connecting-ip') ?? 'unknown';
+  const bytes = await crypto.subtle.digest(
+    'SHA-256',
+    new TextEncoder().encode(`${c.env.COOKIE_SECRET}|${address}`),
+  );
+  return [...new Uint8Array(bytes).slice(0, 12)]
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
+}
+
+/** Bolna's webhook addresses (BOLNA_WEBHOOK_IPS); "*" or empty accepts any. */
+function webhookFromBolna(c: Context<Env>): boolean {
+  const allowed = (c.env.BOLNA_WEBHOOK_IPS ?? '')
+    .split(',')
+    .map((a) => a.trim())
+    .filter(Boolean);
+  if (allowed.length === 0 || allowed.includes('*')) return true;
+  return allowed.includes(c.req.header('cf-connecting-ip') ?? '');
+}
 
 /** Turns a failed zod check into a plain 400 the screens can show. */
 const json = <T extends z.ZodType>(schema: T) =>
@@ -88,7 +136,23 @@ app.post('/api/auth', json(z.object({ passcode: z.string().max(200) })), async (
       503,
     );
   }
+  // Guessing is slowed down: a few wrong tries per address, and a ceiling for everyone together,
+  // in each 15 minutes. While either is reached, even the right passcode waits.
+  const db = dbOf(c);
+  const ipHash = await addressHash(c);
+  const recent = await db
+    .select({ ipHash: loginAttempts.ipHash })
+    .from(loginAttempts)
+    .where(gte(loginAttempts.createdAt, new Date(Date.now() - LOGIN_WINDOW_MS)))
+    .all();
+  if (
+    recent.filter((r) => r.ipHash === ipHash).length >= LOGIN_TRIES_PER_ADDRESS ||
+    recent.length >= LOGIN_TRIES_IN_ALL
+  ) {
+    return c.json({ error: 'Too many wrong passcodes. Try again in 15 minutes.' }, 429);
+  }
   if (!safeEqual(c.req.valid('json').passcode.trim(), c.env.APP_PASSCODE)) {
+    await db.insert(loginAttempts).values({ id: newId('evt'), ipHash });
     return c.json({ error: 'That passcode is not right.' }, 401);
   }
   await startSession(c);
@@ -118,7 +182,7 @@ api.post(
 );
 
 api.get('/requests/:id', async (c) => {
-  const view = await orderView(dbOf(c), c.req.param('id'));
+  const view = await viewOf(c, dbOf(c), c.req.param('id'));
   return view ? c.json(view) : c.json({ error: 'No such order.' }, 404);
 });
 
@@ -172,7 +236,7 @@ api.patch(
     }
     if (Object.keys(patch).length > 0)
       await db.update(requests).set(patch).where(eq(requests.id, id));
-    return c.json(await orderView(db, id));
+    return c.json(await viewOf(c, db, id));
   },
 );
 
@@ -198,11 +262,16 @@ api.post(
         { error: 'Use a 10-digit Indian mobile number, or +country code and number.' },
         400,
       );
+    // Only numbers on the approved list, and none at all until the owner makes one: the
+    // passcode is shared with judges, so it must never let anyone dial a stranger.
     const allowlist = parseAllowlist(c.env.SUPPLIER_ALLOWLIST);
-    if (allowlist.size > 0 && !allowlist.has(phone)) {
+    if (!mayCall(allowlist, phone)) {
       return c.json(
         {
-          error: 'Bhaav may only call numbers on its approved list. Ask the owner to add this one.',
+          error:
+            allowlist !== 'any' && allowlist.size === 0
+              ? 'No numbers are approved for calls yet. The owner adds them in SUPPLIER_ALLOWLIST.'
+              : 'Bhaav may only call numbers on its approved list. Ask the owner to add this one.',
         },
         403,
       );
@@ -224,7 +293,7 @@ api.post(
       language: body.language,
       consentNote: body.consentNote,
     });
-    return c.json(await orderView(db, id), 201);
+    return c.json(await viewOf(c, db, id), 201);
   },
 );
 
@@ -236,7 +305,7 @@ api.delete('/requests/:id/suppliers/:supplierId', async (c) => {
   await db
     .delete(suppliers)
     .where(and(eq(suppliers.id, c.req.param('supplierId')), eq(suppliers.requestId, id)));
-  return c.json(await orderView(db, id));
+  return c.json(await viewOf(c, db, id));
 });
 
 api.post('/requests/:id/start', async (c) => {
@@ -249,13 +318,13 @@ api.post('/requests/:id/start', async (c) => {
       result.notFound ? 404 : 409,
     );
   const step = await advance(diallerEnv(c.env), db, id);
-  return c.json({ step, view: await orderView(db, id) });
+  return c.json({ step, view: await viewOf(c, db, id) });
 });
 
 api.post('/requests/:id/approve', json(z.object({ quoteId: z.string() })), async (c) => {
   const db = dbOf(c);
   const id = c.req.param('id');
-  const view = await orderView(db, id);
+  const view = await viewOf(c, db, id);
   if (!view) return c.json({ error: 'No such order.' }, 404);
   if (view.order.status !== 'done')
     return c.json({ error: 'Approve once all calls are finished.' }, 409);
@@ -269,7 +338,7 @@ api.post('/requests/:id/approve', json(z.object({ quoteId: z.string() })), async
   await db
     .insert(events)
     .values({ id: newId('evt'), requestId: id, type: 'approved', detail: { quoteId } });
-  return c.json(await orderView(db, id));
+  return c.json(await viewOf(c, db, id));
 });
 
 // Round 3, only when the buyer presses it: Bhaav tells the chosen supplier.
@@ -278,11 +347,23 @@ api.post('/requests/:id/confirm', async (c) => {
   const id = c.req.param('id');
   const result = await confirmChoice(diallerEnv(c.env), db, id);
   if (!result.ok) return c.json({ error: result.message }, result.notFound ? 404 : 409);
-  return c.json({ message: result.message, view: await orderView(db, id) });
+  return c.json({ message: result.message, view: await viewOf(c, db, id) });
 });
 
 // Price memory: each item's best price per past order.
 api.get('/prices', async (c) => c.json(await priceSeries(dbOf(c))));
+
+// One order's "last time" prices. Asked for once by the results page, never polled.
+api.get('/requests/:id/history', async (c) => {
+  const db = dbOf(c);
+  const request = await db
+    .select()
+    .from(requests)
+    .where(eq(requests.id, c.req.param('id')))
+    .get();
+  if (!request) return c.json({ error: 'No such order.' }, 404);
+  return c.json(request.isPractice ? [] : await historyFor(db, request));
+});
 
 api.post(
   '/web-session',
@@ -298,6 +379,15 @@ api.post(
     const bolna = { apiKey: c.env.BOLNA_API_KEY, baseUrl: c.env.BOLNA_BASE_URL };
     // Set once a practice call is saved, so a failed start can mark it failed, not leave it queued.
     let practiceCallId: string | null = null;
+    // Browser calls spend Bolna's credit like phone calls, and the passcode is shared with
+    // judges, so Desk and practice calls share one hourly ceiling.
+    const busy = () =>
+      c.json(
+        {
+          error: `Browser calls are busy right now (at most ${WEB_CALLS_PER_HOUR} an hour). Try again in a few minutes.`,
+        },
+        429,
+      );
     try {
       if (body.kind === 'desk') {
         if (!c.env.BOLNA_DESK_AGENT_ID)
@@ -308,24 +398,39 @@ api.post(
           .where(eq(requests.id, body.requestId))
           .get();
         if (!request) return c.json({ error: 'No such order.' }, 404);
+        if ((await webCallsLastHour(db)) >= WEB_CALLS_PER_HOUR) return busy();
         const session = await mintWebSession(bolna, {
           agentId: c.env.BOLNA_DESK_AGENT_ID,
-          userData: { request_ref: request.id, buyer_name: request.buyerName || 'there' },
+          userData: {
+            request_ref: request.id,
+            buyer_name: request.buyerName || 'there',
+            // The Desk turns "Friday tak" into a date, so it needs today's (Bolna's own
+            // {current_date} follows the caller's timezone, which a browser call may not have).
+            today: todayWords(),
+            timezone: 'Asia/Kolkata',
+          },
+        });
+        await db.insert(events).values({
+          id: newId('evt'),
+          requestId: request.id,
+          type: 'desk_started',
+          detail: {},
         });
         return c.json({ session });
       }
 
-      if (!c.env.BOLNA_CALLER_AGENT_ID)
+      // A practice call runs on its own agent, which Bolna cuts off at 2 minutes; without one
+      // it falls back to the Caller (4 minutes) and only the browser's timer stops it at 2.
+      const practiceAgent = c.env.BOLNA_PRACTICE_AGENT_ID || c.env.BOLNA_CALLER_AGENT_ID;
+      if (!practiceAgent)
         return c.json({ error: 'The Caller agent is not set up (BOLNA_CALLER_AGENT_ID).' }, 503);
       const persona = PERSONAS.find((p) => p.id === body.personaId);
       if (!persona) return c.json({ error: 'No such practice supplier.' }, 404);
-      if ((await practiceCallsLastHour(db)) >= PRACTICE_PER_HOUR) {
-        return c.json({ error: 'Practice is busy right now. Try again in a few minutes.' }, 429);
-      }
+      if ((await webCallsLastHour(db)) >= WEB_CALLS_PER_HOUR) return busy();
       const practice = await createPractice(db, persona);
       practiceCallId = practice.call.id;
       const session = await mintWebSession(bolna, {
-        agentId: c.env.BOLNA_CALLER_AGENT_ID,
+        agentId: practiceAgent,
         userData: callerUserData(
           practice.request,
           practice.supplier,
@@ -419,7 +524,7 @@ const chatRequest = z.looseObject({
 app.post('/v1/chat/completions', llmAuth, json(chatRequest), (c) => {
   const db = dbOf(c);
   return catchLies(c.req.valid('json') as ChatRequest, {
-    upstream: (body) =>
+    upstream: (body, signal) =>
       fetch(`${c.env.GROQ_BASE_URL}/chat/completions`, {
         method: 'POST',
         headers: {
@@ -427,6 +532,7 @@ app.post('/v1/chat/completions', llmAuth, json(chatRequest), (c) => {
           'content-type': 'application/json',
         },
         body: JSON.stringify(body),
+        signal,
       }),
     models: c.env.GROQ_MODELS.split(',')
       .map((m) => m.trim())
@@ -465,7 +571,14 @@ tools.on(['GET', 'POST'], '/start_calls', async (c) => {
   const params = await paramsOf(c);
   const requestId = typeof params.request_ref === 'string' ? params.request_ref : '';
   const result = await startOrder(db, requestId, c.env.BOLNA_CALLER_AGENT_ID);
-  if (result.ok) c.executionCtx.waitUntil(advance(diallerEnv(c.env), db, requestId));
+  if (!result.ok) return c.json(result);
+  const dialler = diallerEnv(c.env);
+  c.executionCtx.waitUntil(advance(dialler, db, requestId));
+  // So the Desk can tell the buyer, rather than leave them waiting for a call that won't come yet.
+  if (!inCallHours(dialler.callHours)) {
+    const { from, to } = dialler.callHours;
+    result.message += ` Suppliers are called only between ${from}:00 and ${to}:00 India time, so the first call waits until ${from}:00.`;
+  }
   return c.json(result);
 });
 
@@ -476,16 +589,26 @@ app.route('/tools', tools);
 app.post('/webhooks/bolna/:secret', async (c) => {
   if (!c.env.WEBHOOK_SECRET || !safeEqual(c.req.param('secret'), c.env.WEBHOOK_SECRET))
     return c.notFound();
+  if (!webhookFromBolna(c)) {
+    // Logged so `wrangler tail` shows it if Bolna ever sends from a new address; the cron still
+    // reads every call's status from Bolna, so nothing is lost, only a minute.
+    console.warn(`webhook refused from ${c.req.header('cf-connecting-ip') ?? 'no address'}`);
+    return c.notFound();
+  }
   const execution = await c.req.json<Execution>().catch(() => null);
   if (!execution || typeof execution.status !== 'string') return c.json({ ok: true });
   const db = dbOf(c);
   const finished = await applyExecution(db, execution, findCallRef(execution.context_details));
+  // The line is free: this order's next call, then any order waiting for it.
   if (finished?.channel === 'phone')
-    c.executionCtx.waitUntil(advance(diallerEnv(c.env), db, finished.requestId));
+    c.executionCtx.waitUntil(advanceWaiting(diallerEnv(c.env), db, finished.requestId));
   return c.json({ ok: true });
 });
 
 // ---- Cron: catch up on lost webhooks ----------------------------------------------------
+
+/** How long a login attempt is kept: long enough to count, then deleted. */
+const LOGIN_ATTEMPTS_KEPT_MS = 24 * 60 * 60_000;
 
 export async function sweep(env: Cloudflare.Env): Promise<void> {
   const db = drizzle(env.DB);
@@ -494,21 +617,20 @@ export async function sweep(env: Cloudflare.Env): Promise<void> {
     for (const call of await staleCalls(db, 3 * 60_000)) {
       try {
         const execution = await getExecution(dialler.bolna, call.bolnaExecutionId ?? '');
-        const finished = await applyExecution(db, execution, call.id);
-        if (finished) await advance(dialler, db, finished.requestId);
+        await applyExecution(db, execution, call.id);
       } catch {
         // Try again next minute.
       }
     }
   }
   await failOrphanedCalls(db, 5 * 60_000);
-  for (const requestId of await stalledRequests(db)) {
-    try {
-      await advance(dialler, db, requestId);
-    } catch {
-      // Try again next minute.
-    }
-  }
+  await giveUpOnStuckCalls(db);
+  // Every order with no live call takes its next step: after a lost webhook, a retry's minute,
+  // the start of calling hours, or another order's call ending.
+  await advanceWaiting(dialler, db);
+  await db
+    .delete(loginAttempts)
+    .where(lt(loginAttempts.createdAt, new Date(Date.now() - LOGIN_ATTEMPTS_KEPT_MS)));
 }
 
 export default {

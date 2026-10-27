@@ -67,16 +67,25 @@ export function personaCards(): Persona[] {
   }));
 }
 
-/** At most this many practice calls an hour, so judges can't drain the credit. */
-export const PRACTICE_PER_HOUR = 30;
+/** At most this many browser calls (practice and Desk together) an hour, so nobody drains the credit. */
+export const WEB_CALLS_PER_HOUR = 30;
 
-export async function practiceCallsLastHour(db: Db, now = Date.now()): Promise<number> {
-  const rows = await db
-    .select({ id: calls.id })
-    .from(calls)
-    .where(and(eq(calls.channel, 'web'), gte(calls.createdAt, new Date(now - 3_600_000))))
-    .all();
-  return rows.length;
+/** Practice calls and Desk conversations started in the last hour. */
+export async function webCallsLastHour(db: Db, now = Date.now()): Promise<number> {
+  const since = new Date(now - 3_600_000);
+  const [practice, desk] = await Promise.all([
+    db
+      .select({ id: calls.id })
+      .from(calls)
+      .where(and(eq(calls.channel, 'web'), gte(calls.createdAt, since)))
+      .all(),
+    db
+      .select({ id: events.id })
+      .from(events)
+      .where(and(eq(events.type, 'desk_started'), gte(events.createdAt, since)))
+      .all(),
+  ]);
+  return practice.length + desk.length;
 }
 
 /** Creates the practice order, its pretend quote book and the judge's call. */

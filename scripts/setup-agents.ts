@@ -1,11 +1,12 @@
 // Sets Bhaav up in Bolna: registers the Worker as a custom LLM, then creates (or updates) the
-// Desk and Caller agents. Run after the Worker is deployed.
+// Desk, the Caller, and the practice Caller (the Caller cut off at two minutes, for judges).
+// Run after the Worker is deployed.
 //
 //   BOLNA_API_KEY=… WORKER_URL=https://bhaav.<you>.workers.dev LLM_SECRET=… TOOL_SECRET=… \
 //   WEBHOOK_SECRET=… npm run agents:setup
 //
-// Optional: DESK_AGENT_ID / CALLER_AGENT_ID to update existing agents instead of creating new
-// ones; SARVAM_VOICE_ID and SARVAM_VOICE_NAME to pick another bulbul:v4-flash voice.
+// Optional: DESK_AGENT_ID / CALLER_AGENT_ID / PRACTICE_AGENT_ID to update existing agents instead
+// of creating new ones; SARVAM_VOICE_ID and SARVAM_VOICE_NAME to pick another bulbul:v4-flash voice.
 // `npm run agents:print` writes the request bodies to bolna/ with secrets masked, and calls nothing.
 
 import { mkdirSync, writeFileSync } from 'node:fs';
@@ -39,19 +40,19 @@ const setup: AgentSetup = {
 
 if (dry) {
   mkdirSync('bolna', { recursive: true });
-  for (const kind of ['desk', 'caller', 'caller-graph'] as const) {
+  for (const kind of ['desk', 'caller', 'caller-graph', 'practice'] as const) {
     writeFileSync(
       `bolna/${kind}-agent.json`,
       `${JSON.stringify(agentBody(kind, setup), null, 2)}\n`,
     );
-    if (kind === 'caller-graph') continue;
+    if (kind !== 'desk' && kind !== 'caller') continue;
     writeFileSync(
       `bolna/${kind}-tools.json`,
       `${JSON.stringify(dashboardTools(kind, setup), null, 2)}\n`,
     );
   }
   console.log(
-    'Wrote bolna/desk-agent.json, bolna/caller-agent.json, bolna/caller-graph-agent.json and the *-tools.json files (secrets masked).',
+    'Wrote bolna/desk-agent.json, bolna/caller-agent.json, bolna/caller-graph-agent.json, bolna/practice-agent.json and the *-tools.json files (secrets masked). The practice agent uses the Caller tools.',
   );
   process.exit(0);
 }
@@ -89,27 +90,35 @@ else
   );
 
 // 2. Create or update each agent.
-for (const kind of ['desk', callerKind] as const) {
-  const existing = process.env[kind === 'desk' ? 'DESK_AGENT_ID' : 'CALLER_AGENT_ID']?.trim();
+const AGENTS = [
+  { kind: 'desk', label: 'Desk', idVar: 'DESK_AGENT_ID', setting: 'BOLNA_DESK_AGENT_ID' },
+  { kind: callerKind, label: 'Caller', idVar: 'CALLER_AGENT_ID', setting: 'BOLNA_CALLER_AGENT_ID' },
+  {
+    kind: 'practice',
+    label: 'Practice Caller',
+    idVar: 'PRACTICE_AGENT_ID',
+    setting: 'BOLNA_PRACTICE_AGENT_ID',
+  },
+] as const;
+for (const { kind, label, idVar, setting } of AGENTS) {
+  const existing = process.env[idVar]?.trim();
   const body = agentBody(kind, setup);
   const res = existing
     ? await bolna('PUT', `/v2/agent/${existing}`, body)
     : await bolna('POST', '/v2/agent', body);
   if (!res.ok) {
-    console.error(`\nBolna refused the ${kind} agent (${res.status}):`, res.json);
+    console.error(`\nBolna refused the ${label} agent (${res.status}):`, res.json);
     console.error(
       'Run `npm run agents:print` and create it in the dashboard from bolna/*.json instead.',
     );
     process.exit(1);
   }
   const id = existing ?? (res.json as { agent_id?: string }).agent_id;
-  console.log(
-    `${kind === 'desk' ? 'Desk' : 'Caller'} agent ${existing ? 'updated' : 'created'}: ${id}`,
-  );
+  console.log(`${label} agent ${existing ? 'updated' : 'created'}: ${setting} = "${id}"`);
 }
 
 console.log(`
 Next:
-  1. Put the two ids in worker/wrangler.toml as BOLNA_DESK_AGENT_ID and BOLNA_CALLER_AGENT_ID.
+  1. Put the three ids in worker/wrangler.toml (the lines printed above).
   2. npm run build && npm run deploy -w worker
   3. In Bolna, place one test call from each agent before any real supplier call.`);

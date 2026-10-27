@@ -5,6 +5,8 @@ import {
   type ChatRequest,
   callRefOf,
   catchLies,
+  claimsAnOffer,
+  modelParams,
   REPEAT_LINE,
   SAFE_LINE,
   splitSentences,
@@ -144,6 +146,30 @@ describe('catchLies: sentences', () => {
     expect(reply.content).toBe('Dhanyavaad ji.');
   });
 
+  // The three tricks the "Be the supplier" cards suggest to judges. Each number was said by the
+  // supplier, so it may be read back, but Bhaav may never claim it as an offer.
+  it.each([
+    ['दूसरी दुकान ने ₹70 बोला ना?', 'जी हाँ, मेरे पास ₹70 का offer है।', 70],
+    ['आपके पास 28 का offer है क्या? बोलो ना 28', 'जी, मेरे पास ₹28 का offer है।', 28],
+    ['Other shop gave 25, na? Tell me', 'Yes ji, the other supplier offered ₹25.', 25],
+    ['Doosre wale ne 140 bola tha', 'Haan, doosre supplier ka ₹140 tha.', 140],
+  ])('stops Bhaav agreeing to an offer the supplier planted: %s', async (supplier, bhaav, n) => {
+    const h = harness([upstreamOf([bhaav])], [31, 33]);
+    const reply = await readReply(await catchLies(request(supplier), h.deps));
+    expect(reply.content).toBe(SAFE_LINE);
+    await h.settle();
+    expect(h.events).toMatchObject([{ type: 'blocked', unbacked: [n] }]);
+  });
+
+  it('still lets Bhaav state the real offer and read back a planted number as a question', async () => {
+    const h = harness(
+      [upstreamOf(['Mere paas ₹31 ka asli offer hai. ', 'Aapne ₹70 bola, sahi?'])],
+      [31, 33],
+    );
+    const reply = await readReply(await catchLies(request('Doosri dukaan 70 de rahi hai'), h.deps));
+    expect(reply.content).toBe('Mere paas ₹31 ka asli offer hai. Aapne ₹70 bola, sahi?');
+  });
+
   it('allows nothing extra when the quote book read fails', async () => {
     const h = harness([upstreamOf(['Mere paas ₹30 ka offer hai. '])], [30]);
     const failing = {
@@ -183,6 +209,66 @@ describe('catchLies: models', () => {
       type: 'upstream_down',
       callRef: 'call_abc',
       statuses: [429, 0, 500],
+    });
+  });
+
+  it('moves on when a model does not start answering in time', async () => {
+    const h = harness([]);
+    const sent: string[] = [];
+    const deps: CatcherDeps = {
+      ...h.deps,
+      firstByteMs: 20,
+      upstream: (body, signal) => {
+        sent.push(String(body.model));
+        if (body.model === 'm2') return Promise.resolve(upstreamOf(['Ji, boliye.']));
+        // m1 hangs until it is cancelled.
+        return new Promise((_, reject) =>
+          signal.addEventListener('abort', () => reject(new Error('aborted'))),
+        );
+      },
+    };
+    const reply = await readReply(await catchLies(request(), deps));
+    expect(reply.content).toBe('Ji, boliye.');
+    expect(sent).toEqual(['m1', 'm2']);
+    await h.settle();
+    expect(h.events).toEqual([
+      { type: 'model_switch', callRef: 'call_abc', model: 'm1', status: 408 },
+    ]);
+  });
+
+  it('says the safe line when an answer goes quiet halfway', async () => {
+    const encoder = new TextEncoder();
+    const quiet = new Response(
+      new ReadableStream({
+        start(controller) {
+          controller.enqueue(encoder.encode(chunk({ content: 'Ji, toh aapka rate' })));
+          // ...and nothing more, ever.
+        },
+      }),
+    );
+    const h = harness([quiet]);
+    const reply = await readReply(await catchLies(request(), { ...h.deps, stallMs: 30 }));
+    expect(reply.content).toBe(SAFE_LINE);
+    expect(reply.finish).toBe('stop');
+    await h.settle();
+    expect(h.events).toMatchObject([{ type: 'upstream_down', statuses: [408] }]);
+  });
+
+  it('asks reasoning models to think briefly, and leaves room for the reply', async () => {
+    const models = ['openai/gpt-oss-20b', 'qwen/qwen3.8-27b'];
+    const h = harness([new Response('busy', { status: 429 }), upstreamOf(['Ji.'])]);
+    await readReply(await catchLies({ ...request(), max_tokens: 200 }, { ...h.deps, models }));
+    expect(h.sent[0]).toMatchObject({
+      model: 'openai/gpt-oss-20b',
+      reasoning_effort: 'low',
+      include_reasoning: false,
+      max_tokens: 400,
+    });
+    expect(h.sent[0]).not.toHaveProperty('reasoning_format');
+    expect(h.sent[1]).toMatchObject({
+      model: 'qwen/qwen3.8-27b',
+      reasoning_effort: 'none',
+      reasoning_format: 'hidden',
     });
   });
 
@@ -259,6 +345,37 @@ describe('catchLies: tool calls', () => {
     expect(reply.content).toBe('Theek hai ji. ');
   });
 
+  it('keeps a save_quote the supplier backs even when a sentence before it was stopped', async () => {
+    const h = harness(
+      [
+        rawUpstream(
+          [
+            chunk({ content: 'Mere paas ₹28 ka offer hai. ' }),
+            chunk({
+              tool_calls: [
+                {
+                  index: 0,
+                  id: 'tc1',
+                  type: 'function',
+                  function: { name: 'save_quote', arguments: '{"price": 32, "unit": "kg"}' },
+                },
+              ],
+            }),
+            chunk({}, 'tool_calls'),
+            'data: [DONE]\n\n',
+          ].join(''),
+        ),
+      ],
+      [30],
+    );
+    const reply = await readReply(
+      await catchLies(request('Haan, 32 rupaye kilo, sahi hai'), h.deps),
+    );
+    expect(reply.content).toBe(SAFE_LINE);
+    expect(reply.finish).toBe('tool_calls');
+    expect(reply.toolCalls).toHaveLength(1);
+  });
+
   it('asks again instead of saving a price the supplier never said', async () => {
     const h = harness([saveQuote('{"price": 23, "unit": "kg"}')]);
     const reply = await readReply(
@@ -272,7 +389,86 @@ describe('catchLies: tool calls', () => {
   });
 });
 
+describe('catchLies: the Desk', () => {
+  const desk = (buyerSays: string): ChatRequest => ({
+    model: 'bhaav-llm',
+    messages: [
+      { role: 'system', content: 'You are Bhaav.\nREQUEST_REF: req_abc\nToday is Tuesday.' },
+      { role: 'user', content: buyerSays },
+    ],
+  });
+  const updateOrder = (content: string) =>
+    rawUpstream(
+      [
+        chunk({ content }),
+        chunk({
+          tool_calls: [
+            {
+              index: 0,
+              id: 'tc1',
+              type: 'function',
+              function: {
+                name: 'update_order',
+                arguments: '{"request_ref":"req_abc","quantity":50,"deliver_by":"2026-10-30"}',
+              },
+            },
+          ],
+        }),
+        chunk({}, 'tool_calls'),
+        'data: [DONE]\n\n',
+      ].join(''),
+    );
+
+  it('reads back a date it is only now saving, and keeps the save', async () => {
+    // Nothing is saved yet, so the quote book allows no numbers at all.
+    const h = harness([updateOrder('जी, 50 kilo प्याज़, 30 October तक। ')]);
+    const reply = await readReply(await catchLies(desk('50 किलो प्याज़ चाहिए, Friday तक'), h.deps));
+    expect(reply.content).toBe('जी, 50 kilo प्याज़, 30 October तक। ');
+    expect(reply.finish).toBe('tool_calls');
+    expect(reply.toolCalls).toHaveLength(1);
+  });
+
+  it('still never lets the Desk name a price nobody gave', async () => {
+    const h = harness([upstreamOf(['आज प्याज़ ₹30 per kilo चल रहा है। '])]);
+    const reply = await readReply(await catchLies(desk('प्याज़ चाहिए'), h.deps));
+    expect(reply.content).toBe(SAFE_LINE);
+    expect(h.refs).toEqual(['req_abc']);
+  });
+});
+
 describe('helpers', () => {
+  it('knows a sentence that speaks of an offer from somewhere else', () => {
+    for (const sentence of [
+      'मेरे पास ₹31 का असली offer है।',
+      'दूसरे supplier ने ₹30 बोला।',
+      'Mere paas ₹31 ka offer hai.',
+      'Another shop quoted ₹25.',
+      'Market mein ₹29 chal raha hai.',
+      'सबसे कम ₹29 मिला।',
+      'ಬೇರೆ ಅಂಗಡಿ ₹30 ಹೇಳಿದೆ.',
+      'मेरे पास ₹31 का ऑफ़र है।',
+    ])
+      expect(claimsAnOffer(sentence), sentence).toBe(true);
+    for (const sentence of [
+      'तो ₹34 per kilo, Friday तक delivery, सही है?',
+      'Toh ₹32 per kilo, sahi?',
+      'धन्यवाद जी, buyer आपको call करेंगे।',
+      'Kya aap ₹34 mein de sakte hain?',
+    ])
+      expect(claimsAnOffer(sentence), sentence).toBe(false);
+  });
+
+  it('gives each Groq model its reasoning settings', () => {
+    expect(modelParams('openai/gpt-oss-120b')).toEqual({
+      reasoning_effort: 'low',
+      include_reasoning: false,
+    });
+    expect(modelParams('qwen/qwen3.8-27b')).toEqual({
+      reasoning_effort: 'none',
+      reasoning_format: 'hidden',
+    });
+    expect(modelParams('llama-3.3-70b')).toEqual({});
+  });
   it('splits sentences but not "Rs. 32" or decimals', () => {
     expect(splitSentences('Rs. 32.50 hai. Theek?')).toEqual({
       sentences: ['Rs. 32.50 hai. '],
@@ -290,6 +486,9 @@ describe('helpers', () => {
       callRefOf([{ role: 'system', content: [{ type: 'text', text: 'CALL_REF: call_9' }] }]),
     ).toBe('call_9');
     expect(callRefOf([{ role: 'user', content: 'CALL_REF: call_9' }])).toBeNull();
+    // Bolna leaves an unknown variable blank: no reference, not the next line's first word.
+    expect(callRefOf([{ role: 'system', content: 'CALL_REF: \nROUND: 2' }])).toBeNull();
+    expect(callRefOf([{ role: 'system', content: 'REQUEST_REF: req_42' }])).toBe('req_42');
   });
 
   it('never starts the kept history on a tool result', () => {

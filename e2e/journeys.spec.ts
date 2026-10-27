@@ -97,6 +97,7 @@ test('a supplier added by mistake can be removed before calling starts', async (
   for (const name of ['Keep Traders', 'Mistake Traders']) {
     await page.getByLabel('Name', { exact: true }).fill(name);
     await page.getByLabel('Mobile number').fill(phone());
+    await page.getByLabel('How they agreed').fill('said yes on the phone');
     await page.getByLabel(/agreed to take a call/).check();
     await page.getByRole('button', { name: 'Add supplier' }).click();
     await expect(page.getByText(name, { exact: true })).toBeVisible();
@@ -166,6 +167,38 @@ test('the calls page says so when the AI does not answer', async ({ page }) => {
   await expect(
     page.getByText('The AI did not answer in time; Bhaav said its safe line.'),
   ).toBeVisible();
+});
+
+test('a calling order with no live call says why it is waiting', async ({ page }) => {
+  await signIn(page);
+  const id = await finishedOrder(page, `waiting ${stamp()}`, 1);
+  // The local fake never makes Bolna busy and calls at any hour, so the server's answer is
+  // reshaped into a waiting order: first outside calling hours, then after a busy Bolna.
+  let waitingFor: 'hours' | 'retry' = 'hours';
+  await page.route(`**/api/requests/${id}`, async (route) => {
+    const response = await route.fetch();
+    const body = await response.json();
+    body.order.status = 'calling';
+    body.waitingFor = waitingFor;
+    body.callHours = { from: 10, to: 19 }; // the deployed default; local runs use 0-24
+    if (waitingFor === 'retry')
+      body.calls = body.calls.map((c: object) => ({ ...c, status: 'failed', retryable: true }));
+    await route.fulfill({ response, json: body });
+  });
+
+  await page.goto(`/r/${id}`);
+  await expect(
+    page.getByText(
+      'Suppliers are called only between 10:00 and 19:00 India time, so the next call starts at 10:00.',
+    ),
+  ).toBeVisible();
+
+  waitingFor = 'retry';
+  await page.reload();
+  await expect(
+    page.getByText('Bolna was busy, so Bhaav will try that call again in a minute.'),
+  ).toBeVisible();
+  await expect(page.getByText('Ask: Bolna busy, trying again')).toBeVisible();
 });
 
 test('the skip link appears on the first Tab and the last order is one click away', async ({

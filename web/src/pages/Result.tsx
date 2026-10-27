@@ -5,7 +5,7 @@ import type { OrderView } from '@bhaav/shared';
 import { useState } from 'react';
 import { useParams } from 'react-router';
 import { OrderUnavailable } from '../App';
-import { api, useApplyOrder, useOrder } from '../api';
+import { api, useApplyOrder, useHistory, useOrder } from '../api';
 import { PriceChart, trendSentence } from '../chart';
 import { type Choice, choiceOf } from '../choice';
 import { callLabel, dateLabel, isLive, quoteTerms, rupees, unitWord } from '../format';
@@ -251,6 +251,8 @@ function ConfirmCard({
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const { confirmCall, changed, approved } = choice;
+  // Bolna was too busy to place the last try: the buyer may ask again.
+  const busyEarlier = confirmCall?.status === 'failed' && confirmCall.retryable;
 
   async function confirm() {
     setBusy(true);
@@ -274,7 +276,7 @@ function ConfirmCard({
         says you accept their quote and will call to arrange payment.
       </p>
       <div className="mt-4 flex flex-col gap-3">
-        {confirmCall ? (
+        {confirmCall && !busyEarlier ? (
           <div>
             <Pill
               tone={
@@ -291,8 +293,13 @@ function ConfirmCard({
           </div>
         ) : (
           <Button variant="primary" busy={busy} icon={PhoneCall} onClick={confirm}>
-            Ask Bhaav to tell {supplierName}
+            {busyEarlier ? `Try again: tell ${supplierName}` : `Ask Bhaav to tell ${supplierName}`}
           </Button>
+        )}
+        {busyEarlier && (
+          <p className="text-sm text-muted-fg">
+            Bolna was busy, so the call was not placed. Try again in a minute.
+          </p>
         )}
         {changed ? (
           <Notice tone="warn" title={`${supplierName} changed their quote on the call`}>
@@ -307,11 +314,14 @@ function ConfirmCard({
             </Notice>
           )
         )}
-        {confirmCall && !isLive(confirmCall.status) && confirmCall.status !== 'completed' && (
-          <p className="text-sm text-muted-fg">
-            Bhaav could not reach them. Call {supplierName} yourself to place the order.
-          </p>
-        )}
+        {confirmCall &&
+          !busyEarlier &&
+          !isLive(confirmCall.status) &&
+          confirmCall.status !== 'completed' && (
+            <p className="text-sm text-muted-fg">
+              Bhaav could not reach them. Call {supplierName} yourself to place the order.
+            </p>
+          )}
         {error && <Notice tone="danger">{error}</Notice>}
       </div>
     </Card>
@@ -385,18 +395,33 @@ function MemoryCard({ view }: { view: OrderView }) {
   const o = view.order;
   const unit = unitWord(o.unit);
   const best = view.ranking.find((r) => r.quoteId === view.bestQuoteId);
-  const previous = view.history.at(-1);
+  const historyQuery = useHistory(o.id);
+  const history = historyQuery.data ?? [];
+  const previous = history.at(-1);
   const points =
     best?.perUnit != null
       ? [
-          ...view.history,
+          ...history,
           { requestId: o.id, date: Date.now(), perUnit: best.perUnit, supplierName: 'today' },
         ]
-      : view.history;
+      : history;
 
   return (
     <Card title="Price memory" icon={ChartLineUp}>
-      {view.history.length === 0 ? (
+      {historyQuery.isPending ? (
+        <p className="text-muted-fg">Looking up past prices…</p>
+      ) : historyQuery.isError ? (
+        <p className="text-muted-fg">
+          Past prices could not be loaded.{' '}
+          <button
+            type="button"
+            className="min-h-11 font-medium text-link"
+            onClick={() => historyQuery.refetch()}
+          >
+            Try again
+          </button>
+        </p>
+      ) : history.length === 0 ? (
         <p className="text-muted-fg">
           This is the first {o.item ?? 'order'} bought through Bhaav. Next time, today's price shows
           up here to compare.

@@ -22,7 +22,10 @@ const sameTerms = (a: QuoteDto, b: QuoteDto) =>
 export function choiceOf(view: OrderView): Choice | null {
   const approved = view.quotes.find((q) => q.id === view.order.approvedQuoteId);
   if (!approved) return null;
-  const confirmCall = view.calls.find((c) => c.round === 3 && c.supplierId === approved.supplierId);
+  // The latest try: a confirmation Bolna was too busy to place is tried again.
+  const confirmCall = view.calls
+    .filter((c) => c.round === 3 && c.supplierId === approved.supplierId)
+    .at(-1);
   const fromCall = confirmCall
     ? view.quotes
         .filter((q) => q.callId === confirmCall.id)

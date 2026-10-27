@@ -1,0 +1,29 @@
+# Lint, typecheck, tests and the build on every push and pull request. Deploys stay manual
+# (`npm run deploy -w worker`). The browser tests need Chrome and the fake Bolna, so they run
+# locally with `npm run e2e`.
+name: CI
+
+on:
+  push:
+  pull_request:
+
+# Reads the code and nothing else.
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+      # The test bench's harness, scripted: no Groq key, no network.
+      - run: npm run bench -- --dry

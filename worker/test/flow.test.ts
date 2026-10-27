@@ -1,7 +1,7 @@
 // The whole order flow through the real routes, with Bolna faked at https://bolna.test.
 
 import { createExecutionContext, env, waitOnExecutionContext } from 'cloudflare:test';
-import type { OrderView } from '@bhaav/shared';
+import type { OrderView, PricePoint } from '@bhaav/shared';
 import { eq } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/d1';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -22,7 +22,10 @@ interface FakeBolna {
     user_data: Record<string, string>;
   }>;
   executions: Map<string, Record<string, unknown>>;
-  failNextCall: () => void;
+  /** What each browser-call session was minted with. */
+  minted: Array<{ agent_id: string; user_data: Record<string, string> }>;
+  /** The next POST /call is refused: 500 by default (a passing fault), 400 for the number. */
+  failNextCall: (status?: number, body?: string) => void;
   failNextMint: () => void;
   /** The execution id Bolna gave the nth placed call (1-based); unique across tests. */
   exec: (n: number) => string;
@@ -36,14 +39,16 @@ function fakeBolna(): FakeBolna {
   const prefix = crypto.randomUUID().slice(0, 8);
   const exec = (n: number) => `exec_${prefix}_${n}`;
   const runId = `run_${prefix}`;
-  let failNext = false;
+  const minted: FakeBolna['minted'] = [];
+  let failNext: { status: number; body: string } | null = null;
   let failMint = false;
   vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
     const url = input instanceof Request ? input.url : String(input);
     if (url === 'https://bolna.test/call') {
       if (failNext) {
-        failNext = false;
-        return new Response('carrier error', { status: 500 });
+        const { status, body } = failNext;
+        failNext = null;
+        return new Response(body, { status });
       }
       placed.push(JSON.parse(String(init?.body)));
       return Response.json({
@@ -57,6 +62,7 @@ function fakeBolna(): FakeBolna {
         failMint = false;
         return new Response('no capacity', { status: 503 });
       }
+      minted.push(JSON.parse(String(init?.body)));
       return Response.json({ run_id: runId, agent_id: 'agent-caller', expires_in: 120 });
     }
     const execution = /^https:\/\/bolna\.test\/executions\/(.+)$/.exec(url);
@@ -70,7 +76,10 @@ function fakeBolna(): FakeBolna {
   return {
     placed,
     executions,
-    failNextCall: () => (failNext = true),
+    minted,
+    failNextCall: (status = 500, body = 'carrier error') => {
+      failNext = { status, body };
+    },
     failNextMint: () => (failMint = true),
     exec,
     runId,
@@ -81,7 +90,12 @@ afterEach(() => vi.restoreAllMocks());
 
 let cookie = '';
 
-async function send(path: string, init: RequestInit & { json?: unknown } = {}): Promise<Response> {
+/** A request to the Worker; `settings` overrides its settings (e.g. an empty allowlist). */
+async function send(
+  path: string,
+  init: RequestInit & { json?: unknown } = {},
+  settings: Partial<Record<keyof Cloudflare.Env, string>> = {},
+): Promise<Response> {
   const headers = new Headers(init.headers);
   if (cookie) headers.set('cookie', cookie);
   if (init.json !== undefined) headers.set('content-type', 'application/json');
@@ -91,7 +105,7 @@ async function send(path: string, init: RequestInit & { json?: unknown } = {}): 
     body: init.json !== undefined ? JSON.stringify(init.json) : init.body,
   });
   const ctx = createExecutionContext();
-  const res = await worker.fetch(request, env, ctx);
+  const res = await worker.fetch(request, { ...env, ...settings } as Cloudflare.Env, ctx);
   await waitOnExecutionContext(ctx);
   return res;
 }
@@ -108,6 +122,10 @@ const webhook = (execution: Record<string, unknown>) =>
 
 async function view(id: string): Promise<OrderView> {
   return (await send(`/api/requests/${id}`)).json();
+}
+
+async function history(id: string): Promise<PricePoint[]> {
+  return (await send(`/api/requests/${id}/history`)).json();
 }
 
 async function newOrder(suppliersToAdd = 3): Promise<string> {
@@ -338,10 +356,10 @@ describe('an order from start to approval', () => {
     );
   });
 
-  it('skips a supplier Bolna could not dial and moves on', async () => {
+  it('skips a supplier whose number Bolna refuses outright and moves on', async () => {
     const bolna = fakeBolna();
     const id = await newOrder(2);
-    bolna.failNextCall();
+    bolna.failNextCall(400, 'number is not verified');
     await send(`/api/requests/${id}/start`, { method: 'POST' });
     expect(bolna.placed).toHaveLength(1);
     expect(bolna.placed[0]?.user_data.supplier_name).toBe('Supplier 2');
@@ -403,6 +421,104 @@ describe('an order from start to approval', () => {
     expect(bolna.placed).toHaveLength(2);
     expect((await view(id)).calls[0]?.transcript).toBe('polled');
   });
+
+  it('waits out a busy Bolna and calls the same supplier again, not the next one', async () => {
+    const bolna = fakeBolna();
+    const id = await newOrder(2);
+    bolna.failNextCall(); // a 500: Bolna's fault, not the number's
+    await send(`/api/requests/${id}/start`, { method: 'POST' });
+    expect(bolna.placed).toHaveLength(0);
+    const waiting = await view(id);
+    expect(waiting.waitingFor).toBe('retry');
+    expect(waiting.calls).toMatchObject([{ status: 'failed', retryable: true, attempt: 1 }]);
+
+    // A minute later the cron tries Supplier 1 again.
+    await db
+      .update(calls)
+      .set({ createdAt: new Date(Date.now() - 2 * 60_000) })
+      .where(eq(calls.requestId, id));
+    await sweep(env);
+    expect(bolna.placed.map((p) => p.user_data.supplier_name)).toEqual(['Supplier 1']);
+    const retried = await view(id);
+    expect(retried.waitingFor).toBeNull();
+    expect(retried.calls.map((c) => [c.attempt, c.status])).toEqual([
+      [1, 'failed'],
+      [2, 'queued'],
+    ]);
+  });
+});
+
+describe('guards', () => {
+  it('lets no supplier be added until the owner approves numbers', async () => {
+    fakeBolna();
+    const id = await newOrder(0);
+    const res = await send(
+      `/api/requests/${id}/suppliers`,
+      { method: 'POST', json: { name: 'Stranger', phone: '9811122233', consentNote: 'agreed' } },
+      { SUPPLIER_ALLOWLIST: '' },
+    );
+    expect(res.status).toBe(403);
+    expect((await res.json<{ error: string }>()).error).toMatch(/No numbers are approved/);
+  });
+
+  it('holds the calls outside calling hours, and the Desk can say so', async () => {
+    const bolna = fakeBolna();
+    const id = await newOrder(1);
+    // Hours that exclude the present hour in India, whatever time the tests run.
+    const hour = new Date(Date.now() + 330 * 60_000).getUTCHours();
+    const closed = { CALL_HOURS: hour < 23 ? `${hour + 1}-24` : '0-23' };
+    const started = await send(
+      '/tools/start_calls',
+      {
+        method: 'POST',
+        headers: { authorization: 'Bearer test-tool-secret' },
+        json: { request_ref: id },
+      },
+      closed,
+    );
+    expect((await started.json<{ message: string }>()).message).toMatch(/only between/);
+    expect(bolna.placed).toHaveLength(0);
+    const waiting = await (await send(`/api/requests/${id}`, {}, closed)).json<OrderView>();
+    expect(waiting.order.status).toBe('calling');
+    expect(waiting.waitingFor).toBe('hours');
+    // Closed here, so a later test's webhook (which wakes every waiting order) won't dial it.
+    await db.update(requests).set({ status: 'done' }).where(eq(requests.id, id));
+  });
+
+  it('slows down passcode guessing from one address, but not from others', async () => {
+    const from = (address: string, passcode: string) =>
+      send('/api/auth', {
+        method: 'POST',
+        headers: { 'cf-connecting-ip': address },
+        json: { passcode },
+      });
+    for (let i = 0; i < 5; i++) expect((await from('203.0.113.7', 'guess')).status).toBe(401);
+    const blocked = await from('203.0.113.7', 'open-sesame');
+    expect(blocked.status).toBe(429);
+    expect((await blocked.json<{ error: string }>()).error).toMatch(/Too many wrong passcodes/);
+    expect((await from('203.0.113.8', 'open-sesame')).status).toBe(200);
+  });
+
+  it("refuses a webhook from an address that is not Bolna's", async () => {
+    const bolna = fakeBolna();
+    const id = await newOrder(1);
+    await send(`/api/requests/${id}/start`, { method: 'POST' });
+    const onlyBolna = { BOLNA_WEBHOOK_IPS: '13.203.39.153,13.126.9.249' };
+    const post = (address: string) =>
+      send(
+        '/webhooks/bolna/test-hook-secret',
+        {
+          method: 'POST',
+          headers: { 'cf-connecting-ip': address },
+          json: { id: bolna.exec(1), status: 'completed' },
+        },
+        onlyBolna,
+      );
+    expect((await post('198.51.100.9')).status).toBe(404);
+    expect((await view(id)).calls[0]?.status).toBe('queued');
+    expect((await post('13.126.9.249')).status).toBe(200);
+    expect((await view(id)).calls[0]?.status).toBe('completed');
+  });
 });
 
 describe('price memory', () => {
@@ -426,8 +542,7 @@ describe('price memory', () => {
     const first = await order('82');
     const second = await order('79');
 
-    const history = (await view(second)).history;
-    expect(history.map((p) => [p.requestId, p.perUnit])).toEqual([[first, 82]]);
+    expect((await history(second)).map((p) => [p.requestId, p.perUnit])).toEqual([[first, 82]]);
 
     const series = await (await send('/api/prices')).json<
       Array<{ item: string; unit: string; points: Array<{ perUnit: number }> }>
@@ -455,8 +570,10 @@ describe('price memory', () => {
     };
     const first = await order('400');
     const second = await order('390');
-    expect((await view(first)).history).toEqual([]);
-    expect((await view(second)).history.map((p) => p.requestId)).toEqual([first]);
+    expect(await history(first)).toEqual([]);
+    expect((await history(second)).map((p) => p.requestId)).toEqual([first]);
+    // The order view itself carries no history: it is polled every 2 seconds.
+    expect(await view(second)).not.toHaveProperty('history');
   });
 
   it("uses the same best quote as the results page, not a late one that couldn't win", async () => {
@@ -549,6 +666,34 @@ describe('Bolna tools', () => {
       quality: null,
       area: null,
     });
+  });
+
+  it('reads "per quintal" as a unit, and asks about one it cannot read instead of guessing', async () => {
+    const bolna = fakeBolna();
+    const id = await newOrder(1);
+    await send(`/api/requests/${id}/start`, { method: 'POST' });
+    const callRef = bolna.placed.at(-1)?.user_data.call_ref ?? '';
+    const unclear = await (
+      await tool('save_quote', {
+        call_ref: callRef,
+        price: '1600',
+        unit: 'per bori of 50',
+        supplier_words: 'sola sau ki bori',
+      })
+    ).json<{ ok: boolean; message: string }>();
+    expect(unclear.ok).toBe(false);
+    expect(unclear.message).toMatch(/which unit/);
+    const saved = await (
+      await tool('save_quote', {
+        call_ref: callRef,
+        price: '1600',
+        unit: 'per quintal',
+        supplier_words: 'sola sau quintal',
+      })
+    ).json<{ ok: boolean }>();
+    expect(saved.ok).toBe(true);
+    const [quote] = (await view(id)).quotes;
+    expect(quote).toMatchObject({ price: 1600, unit: 'quintal', landedPricePerUnit: 16 });
   });
 
   it('explains a bad unit or date instead of saving it', async () => {
@@ -685,9 +830,49 @@ describe('practice mode', () => {
     expect(res.status).toBe(200);
     const fetchSpy = vi.mocked(globalThis.fetch);
     const [, init] = fetchSpy.mock.calls.at(-1) ?? [];
+    // The Desk is told today's date in India, so "Friday tak" becomes a real date.
     expect(JSON.parse(String(init?.body))).toEqual({
       agent_id: 'agent-desk',
-      user_data: { request_ref: id, buyer_name: 'Ravi' },
+      user_data: {
+        request_ref: id,
+        buyer_name: 'Ravi',
+        today: expect.stringMatching(/^\w+day \d{1,2} \w+ \d{4} \(\d{4}-\d{2}-\d{2}\)$/),
+        timezone: 'Asia/Kolkata',
+      },
     });
+  });
+
+  it('runs practice calls on the practice agent, which Bolna cuts off at 2 minutes', async () => {
+    const bolna = fakeBolna();
+    const res = await send(
+      '/api/web-session',
+      { method: 'POST', json: { kind: 'practice', personaId: 'rice' } },
+      { BOLNA_PRACTICE_AGENT_ID: 'agent-practice' },
+    );
+    expect(res.status).toBe(200);
+    expect(bolna.minted.at(-1)?.agent_id).toBe('agent-practice');
+  });
+
+  // Last in the file: the ceiling it fills stays filled for the next hour.
+  it('caps browser calls, Desk and practice together, at 30 an hour', async () => {
+    const bolna = fakeBolna();
+    const { id } = await (
+      await send('/api/requests', { method: 'POST', json: { buyerName: 'Ravi' } })
+    ).json<{ id: string }>();
+    const desk = () =>
+      send('/api/web-session', { method: 'POST', json: { kind: 'desk', requestId: id } });
+    let answered = 0;
+    while ((await desk()).status === 200) answered++;
+    expect(answered).toBeGreaterThan(0);
+    expect(answered).toBeLessThanOrEqual(30);
+    const refused = await desk();
+    expect(refused.status).toBe(429);
+    expect((await refused.json<{ error: string }>()).error).toMatch(/at most 30 an hour/);
+    const practice = await send('/api/web-session', {
+      method: 'POST',
+      json: { kind: 'practice', personaId: 'onions' },
+    });
+    expect(practice.status).toBe(429);
+    expect(bolna.minted).toHaveLength(answered);
   });
 });

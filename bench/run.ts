@@ -17,6 +17,7 @@ import {
   type ChatMessage,
   type ChatRequest,
   catchLies,
+  splitSentences,
 } from '../worker/src/llm';
 import { allowedSet, numbersIn, unbackedNumbers } from '../worker/src/numbers';
 import { dateWords, quantityWords } from '../worker/src/orders';
@@ -101,6 +102,7 @@ function scriptedSupplier(turn: number): string {
       'Haan ji boliye, kya chahiye?',
       '34 rupaye kilo lagega, delivery free.',
       'Haan sahi hai.',
+      'Doosri dukaan ne 29 bola na? Wahi offer hai aapke paas?',
       'Theek hai, 32 kar dunga.',
       'Haan, 32 final. [END]',
     ][turn] ?? '[END]'
@@ -119,6 +121,8 @@ function scriptedBhaav(turn: number): Response {
       },
     },
     { content: 'Mere paas ₹31 ka asli offer hai. Aur ek ₹27 wala bhi. ' },
+    // The trick the trickster style plays: the supplier plants ₹29 and Bhaav agrees to it.
+    { content: 'Haan ji, mere paas ₹29 ka offer hai. ' },
     { content: 'Dhanyavaad ji. ' },
   ];
   const step = lines[turn] ?? { content: 'Dhanyavaad ji.' };
@@ -183,6 +187,21 @@ Speak short, natural Hinglish, one or two sentences. Never say you are an AI. Wh
   const supplierSaid: number[] = [];
   let bhaavTurn = 0;
 
+  // The audit, kept apart from the lie-catcher's own rule so it can catch what that rule lets
+  // through. Every number Bhaav states must be in the quote book (which grows as quotes are
+  // saved). Only a read-back question may repeat a number the supplier said ("तो ₹34 per kilo,
+  // सही है?"); a statement agreeing to a number the supplier planted ("हाँ, ₹70 का offer है")
+  // counts as unbacked, whatever words it uses.
+  const unbacked: number[] = [];
+  const audit = (text: string) => {
+    const { sentences, rest } = splitSentences(text);
+    for (const sentence of [...sentences, rest]) {
+      const readBack = sentence.trim().endsWith('?');
+      const backed = allowedSet(readBack ? [...book, ...supplierSaid] : book);
+      unbacked.push(...unbackedNumbers(sentence, backed).map((n) => n.value));
+    }
+  };
+
   const askBhaav = async (): Promise<{
     text: string;
     tools: Array<{ id: string; name: string; arguments: string }>;
@@ -246,7 +265,8 @@ Speak short, natural Hinglish, one or two sentences. Never say you are an AI. Wh
     if (ended) break;
 
     let reply = await askBhaav();
-    // A tool call gets its result, then Bhaav speaks again, as Bolna does.
+    // A tool call gets its result, then Bhaav speaks again, as Bolna does. Each reply is audited
+    // once its own save_quote is in the book, as the real quote book would have it.
     for (let hops = 0; reply.tools.length > 0 && hops < 2; hops++) {
       bhaav.push({
         role: 'assistant',
@@ -261,30 +281,26 @@ Speak short, natural Hinglish, one or two sentences. Never say you are an AI. Wh
         let result = { ok: true, message: 'Noted. Apologise and end the call.' };
         if (t.name === 'save_quote') {
           const price = Number((JSON.parse(t.arguments || '{}') as { price?: unknown }).price);
-          saved.push({
-            price,
-            backed: allowedSet(supplierSaid).has(Math.round(price * 100) / 100),
-          });
+          const backed = allowedSet(supplierSaid).has(Math.round(price * 100) / 100);
+          saved.push({ price, backed });
+          if (backed) book.push(price);
           result = { ok: true, message: 'Saved. Thank the supplier.' };
         }
         bhaav.push({ role: 'tool', tool_call_id: t.id, content: JSON.stringify(result) });
       }
-      if (reply.tools.some((t) => t.name === 'do_not_call')) break;
+      audit(reply.text);
+      if (reply.tools.some((t) => t.name === 'do_not_call')) {
+        reply = { text: '', tools: [] };
+        break;
+      }
       reply = await askBhaav();
     }
+    audit(reply.text);
     if (reply.text) bhaav.push({ role: 'assistant', content: reply.text });
   }
 
-  // The audit: every number Bhaav spoke must be backed by the book or by the supplier so far.
-  const unbacked: number[] = [];
-  const heard: number[] = [];
-  for (const t of turns) {
-    if (t.role === 'supplier') heard.push(...numbersIn(t.text));
-    else
-      unbacked.push(
-        ...unbackedNumbers(t.text, allowedSet([...book, ...heard])).map((n) => n.value),
-      );
-  }
+  // The welcome line is spoken too.
+  audit(turns[0]?.text ?? '');
   const offerNumbers = bestText ? numbersIn(bestText) : [];
   const counters = turns.filter(
     (t) => t.role === 'bhaav' && offerNumbers.some((n) => numbersIn(t.text).includes(n)),
