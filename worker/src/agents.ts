@@ -7,6 +7,8 @@ import {
   CALLER_WELCOME,
   DESK_PROMPT,
   DESK_WELCOME,
+  OWNER_PROMPT,
+  OWNER_WELCOME,
   VOICE_RULES,
 } from './prompts';
 
@@ -18,6 +20,8 @@ export interface AgentSetup {
   toolSecret: string;
   webhookSecret: string;
   voice: { id: string; name: string };
+  /** The owner's number: the Caller gets a tool to connect a supplier to them mid-call. */
+  ownerPhone?: string;
 }
 
 interface ToolSpec {
@@ -109,12 +113,62 @@ const CALLER_TOOLS: ToolSpec[] = [
     params: { call_ref: { type: 'string', description: 'The CALL_REF from your instructions.' } },
     required: ['call_ref'],
   },
+  {
+    name: 'call_back_later',
+    description:
+      'The supplier is busy and asked to be called back later. Call it once with the minutes they asked for, then say when you will call, thank them and end the call.',
+    preCallMessage: '',
+    params: {
+      call_ref: { type: 'string', description: 'The CALL_REF from your instructions.' },
+      minutes: {
+        type: 'number',
+        description: 'Minutes from now: 60 for "ek ghante baad", 30 for "aadhe ghante baad".',
+      },
+    },
+    required: ['call_ref', 'minutes'],
+  },
 ];
+
+const OWNER_TOOLS: ToolSpec[] = [
+  {
+    name: 'approve_quote',
+    description:
+      "Approve the owner's chosen quote. Call it only after you read the choice back and the owner clearly said yes.",
+    preCallMessage: '',
+    params: {
+      request_ref: { type: 'string', description: 'The REQUEST_REF from your instructions.' },
+      choice: { type: 'string', description: 'The letter of the chosen quote, e.g. "A".' },
+      tell_supplier: {
+        type: 'string',
+        description: '"yes" if the owner wants Bhaav to call the supplier to tell them, else "no".',
+      },
+    },
+    required: ['request_ref', 'choice'],
+  },
+];
+
+/** The tools each agent has: the Desk takes the order, the Caller calls suppliers, the owner approves. */
+const TOOLS_FOR = (kind: AgentKind): ToolSpec[] =>
+  kind === 'desk' ? DESK_TOOLS : kind === 'owner' ? OWNER_TOOLS : CALLER_TOOLS;
 
 const paramTemplate = (spec: ToolSpec) =>
   Object.fromEntries(Object.keys(spec.params).map((key) => [key, `%(${key})s`]));
 
-function apiTools(specs: ToolSpec[], setup: AgentSetup) {
+/** A tool's call settings in Bolna: where it posts, and the body template. */
+interface ToolParams {
+  method: string;
+  url: string | null;
+  api_token: string | null;
+  param: string;
+}
+
+function apiTools(
+  specs: ToolSpec[],
+  setup: AgentSetup,
+): {
+  tools: Array<Record<string, unknown> & { name: string }>;
+  tools_params: Record<string, ToolParams>;
+} {
   return {
     tools: specs.map((spec) => ({
       name: spec.name,
@@ -138,8 +192,8 @@ function apiTools(specs: ToolSpec[], setup: AgentSetup) {
 }
 
 /** The tools as an OpenAI chat-completions `tools` list, as Bolna passes them to the LLM. */
-export function openAiTools(kind: 'desk' | 'caller') {
-  return (kind === 'desk' ? DESK_TOOLS : CALLER_TOOLS).map((spec) => ({
+export function openAiTools(kind: 'desk' | 'caller' | 'owner') {
+  return TOOLS_FOR(kind).map((spec) => ({
     type: 'function' as const,
     function: {
       name: spec.name,
@@ -150,8 +204,8 @@ export function openAiTools(kind: 'desk' | 'caller') {
 }
 
 /** The same tools in the dashboard's "Write manually" custom-function format, for pasting by hand. */
-export function dashboardTools(kind: 'desk' | 'caller', setup: AgentSetup) {
-  return (kind === 'desk' ? DESK_TOOLS : CALLER_TOOLS).map((spec) => ({
+export function dashboardTools(kind: 'desk' | 'caller' | 'owner', setup: AgentSetup) {
+  return TOOLS_FOR(kind).map((spec) => ({
     name: spec.name,
     description: spec.description,
     pre_call_message: spec.preCallMessage,
@@ -281,7 +335,11 @@ ${VOICE_RULES}`;
           },
           { to_node_id: 'ask_price', condition: 'The supplier agrees to talk' },
           { to_node_id: 'stop_calls', condition: 'The supplier asks never to be called again' },
-          { to_node_id: 'close', condition: 'The supplier is busy or refuses to talk' },
+          {
+            to_node_id: 'call_back',
+            condition: 'The supplier is busy and asks to be called later',
+          },
+          { to_node_id: 'close', condition: 'The supplier refuses to talk' },
         ],
       },
       {
@@ -329,6 +387,12 @@ ${VOICE_RULES}`;
         edges: [{ to_node_id: 'close', condition: 'Done', condition_type: 'unconditional' }],
       },
       {
+        id: 'call_back',
+        prompt:
+          'Call @call_back_later with the minutes they asked for, say in words when you will call ("एक घंटे बाद"), and thank them.',
+        edges: [{ to_node_id: 'close', condition: 'Done', condition_type: 'unconditional' }],
+      },
+      {
         id: 'close',
         node_type: 'static',
         static_message: 'धन्यवाद जी, buyer आपको call करेंगे।',
@@ -341,13 +405,14 @@ ${VOICE_RULES}`;
 
 // ---- Agent bodies ------------------------------------------------------------------------------
 
-export type AgentKind = 'desk' | 'caller' | 'caller-graph' | 'practice';
+export type AgentKind = 'desk' | 'caller' | 'caller-graph' | 'practice' | 'owner';
 
 const AGENT_NAMES: Record<AgentKind, string> = {
   desk: 'Bhaav Desk',
   caller: 'Bhaav Caller',
   'caller-graph': 'Bhaav Caller (graph)',
   practice: 'Bhaav Practice Caller',
+  owner: 'Bhaav Owner Line',
 };
 
 /** Seconds before Bolna hangs up: four minutes a supplier call, two for a judge's practice call. */
@@ -356,19 +421,62 @@ const CALL_SECONDS: Record<AgentKind, number> = {
   caller: 240,
   'caller-graph': 240,
   practice: 120,
+  owner: 180,
 };
 
 /**
- * The POST /v2/agent body for the Desk (talks to the buyer), the Caller (phones suppliers), or
- * the practice Caller (the same Caller, cut off at two minutes, for "Be the supplier").
+ * Bolna's Transfer Call tool, added to the real Caller when the owner's number is known: the
+ * supplier is connected to the owner mid-call. Bolna fixes the number in the tool's settings.
+ */
+function transferTool(ownerPhone: string) {
+  return {
+    tool: {
+      name: 'transfer_to_owner',
+      key: 'transfer_call',
+      description:
+        'Connect the supplier to the buyer. Use it only when the supplier insists on speaking to the buyer in person.',
+      parameters: {
+        type: 'object',
+        properties: { call_sid: { type: 'string', description: 'unique call id' } },
+        required: ['call_sid'],
+      },
+    },
+    params: {
+      method: 'POST',
+      url: null,
+      api_token: null,
+      param: JSON.stringify({ call_transfer_number: ownerPhone, call_sid: '%(call_sid)s' }),
+    },
+  };
+}
+
+/** The tools an agent sends Bolna, with the transfer tool on the real Caller when there is an owner number. */
+function agentTools(kind: AgentKind, setup: AgentSetup): ReturnType<typeof apiTools> {
+  const tools = apiTools(TOOLS_FOR(kind), setup);
+  if (kind !== 'caller' || !setup.ownerPhone) return tools;
+  const transfer = transferTool(setup.ownerPhone);
+  return {
+    tools: [...tools.tools, transfer.tool],
+    tools_params: { ...tools.tools_params, transfer_to_owner: transfer.params },
+  };
+}
+
+/**
+ * The POST /v2/agent body for the Desk (talks to the buyer), the Caller (phones suppliers), the
+ * practice Caller (the same Caller, cut off at two minutes, for "Be the supplier"), or the owner
+ * line (calls the owner with the result, to approve by voice).
  */
 export function agentBody(kind: AgentKind, setup: AgentSetup) {
   const desk = kind === 'desk';
+  const owner = kind === 'owner';
   const graph = kind === 'caller-graph';
+  // Bolna's own calling hours, behind the Worker's (CALL_HOURS), for calls to suppliers.
+  const supplierCalls = kind === 'caller' || kind === 'caller-graph';
   return {
     agent_config: {
       agent_name: AGENT_NAMES[kind],
-      agent_welcome_message: desk ? DESK_WELCOME : CALLER_WELCOME,
+      agent_welcome_message: desk ? DESK_WELCOME : owner ? OWNER_WELCOME : CALLER_WELCOME,
+      ...(supplierCalls ? { calling_guardrails: { call_start_hour: 10, call_end_hour: 19 } } : {}),
       webhook_url: `${setup.workerUrl}/webhooks/bolna/${setup.webhookSecret}`,
       tasks: [
         {
@@ -391,7 +499,7 @@ export function agentBody(kind: AgentKind, setup: AgentSetup) {
             multilingual_config: multilingual(setup),
             input: { provider: 'plivo', format: 'wav' },
             output: { provider: 'plivo', format: 'wav' },
-            api_tools: apiTools(desk ? DESK_TOOLS : CALLER_TOOLS, setup),
+            api_tools: agentTools(kind, setup),
           },
           task_config: {
             // Four minutes a call (the Bhaav promise), two for practice, and hang up on long silence.
@@ -401,6 +509,8 @@ export function agentBody(kind: AgentKind, setup: AgentSetup) {
         },
       ],
     },
-    agent_prompts: { task_1: { system_prompt: desk ? DESK_PROMPT : CALLER_PROMPT } },
+    agent_prompts: {
+      task_1: { system_prompt: desk ? DESK_PROMPT : owner ? OWNER_PROMPT : CALLER_PROMPT },
+    },
   };
 }

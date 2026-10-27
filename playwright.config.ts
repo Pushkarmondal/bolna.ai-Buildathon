@@ -50,7 +50,12 @@ export default defineConfig({
       command: 'npm run fake-bolna',
       port: 8790,
       reuseExistingServer: true,
-      env: { TOOL_SECRET: vars.TOOL_SECRET ?? '', WEBHOOK_SECRET: vars.WEBHOOK_SECRET ?? '' },
+      env: {
+        TOOL_SECRET: vars.TOOL_SECRET ?? '',
+        WEBHOOK_SECRET: vars.WEBHOOK_SECRET ?? '',
+        BOLNA_DESK_AGENT_ID: vars.BOLNA_DESK_AGENT_ID ?? '',
+        BOLNA_OWNER_AGENT_ID: vars.BOLNA_OWNER_AGENT_ID ?? '',
+      },
     },
   ],
 });

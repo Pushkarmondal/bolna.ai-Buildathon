@@ -91,6 +91,26 @@ test.beforeAll(async ({ playwright }) => {
     unit: 'bori',
     supplier_words: 'Supercalifragilisticexpialidocioussupercalifragilisticexpialidociousrice',
   });
+  // Worst-case transcript turns, sent the way Bolna sends a turn: a very long supplier line (the
+  // AI is unreachable here, so Bhaav says its safe line), and a lie the lie-catcher stops.
+  const turn = (callRef: string, said: string) =>
+    api.post('/v1/chat/completions', {
+      headers: { authorization: `Bearer ${process.env.E2E_LLM_SECRET}` },
+      data: {
+        model: 'bhaav-llm',
+        messages: [
+          { role: 'system', content: `You are Bhaav.\nCALL_REF: ${callRef}` },
+          { role: 'user', content: said },
+        ],
+      },
+    });
+  await (
+    await turn(
+      calls[0].id,
+      'Dekhiye sahab, ಮೂವತ್ತೆರಡು ರೂಪಾಯಿ ಕೆಜಿಗೆ aur Supercalifragilisticexpialidocioussupercalifragilisticexpialidocious delivery Koramangala tak, lekin advance pehle chahiye, warna nahi hoga, samjhe aap, bilkul pakka baat hai',
+    )
+  ).text();
+  await (await turn(calls[0].id, 'lie test')).text();
   await api.dispose();
 });
 
@@ -172,6 +192,7 @@ for (const width of WIDTHS) {
       '/prices',
       '/play',
       '/bench',
+      '/proof',
       '/no-such-page',
     ]) {
       await page.goto(path);
@@ -258,6 +279,7 @@ for (const scheme of ['light', 'dark'] as const) {
       '/prices',
       '/play',
       '/bench',
+      '/proof',
     ]) {
       await page.goto(path);
       await page.addStyleTag({ content: '*{animation:none!important;transition:none!important}' });

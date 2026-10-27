@@ -29,6 +29,11 @@ BOLNA_DESK_AGENT_ID = ""
 BOLNA_CALLER_AGENT_ID = ""
 # The Caller again, cut off at 2 minutes, for judges' practice calls. Empty uses the Caller.
 BOLNA_PRACTICE_AGENT_ID = ""
+# The owner line: calls the owner with the result, to approve by voice. Empty turns it off.
+BOLNA_OWNER_AGENT_ID = ""
+# "on" once the Caller has Bolna's transfer tool (agents:setup with OWNER_PHONE): a supplier who
+# insists on the owner is connected to them mid-call.
+BOLNA_HANDOFF = ""
 # Optional: a number bought in Bolna. Empty uses Bolna's default number.
 BOLNA_FROM_NUMBER = ""
 # Comma-separated E.164 numbers Bhaav may call (e.g. "+919800000001,+919800000002").

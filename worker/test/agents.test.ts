@@ -24,7 +24,11 @@ describe('agentBody', () => {
     );
     expect(task?.task_config.call_terminate).toBe(240);
     const tools = task?.tools_config.api_tools;
-    expect(tools?.tools.map((t) => t.name)).toEqual(['save_quote', 'do_not_call']);
+    expect(tools?.tools.map((t) => t.name)).toEqual([
+      'save_quote',
+      'do_not_call',
+      'call_back_later',
+    ]);
     const params = tools?.tools_params.save_quote;
     expect(params).toMatchObject({
       url: 'https://bhaav.example.workers.dev/tools/save_quote',
@@ -69,6 +73,8 @@ describe('prompts', () => {
       'round',
       'best_offer',
       'language',
+      'callback_note',
+      'handoff_rule',
     ];
     const used = new Set([...CALLER_PROMPT.matchAll(/\{([a-z_]+)\}/g)].map((m) => m[1]));
     expect([...used].sort()).toEqual([...sent].sort());
@@ -76,7 +82,7 @@ describe('prompts', () => {
 
   it("give the Desk today's date, which the Worker sends when it starts the call", () => {
     const used = new Set([...DESK_PROMPT.matchAll(/\{([a-z_]+)\}/g)].map((m) => m[1]));
-    expect([...used].sort()).toEqual(['buyer_name', 'request_ref', 'today']);
+    expect([...used].sort()).toEqual(['buyer_name', 'order_note', 'request_ref', 'today']);
   });
 });
 
@@ -121,7 +127,7 @@ describe('callerGraph', () => {
   });
 
   it('only references tools the Caller has', () => {
-    const tools = new Set(['save_quote', 'do_not_call']);
+    const tools = new Set(['save_quote', 'do_not_call', 'call_back_later']);
     for (const node of graph.nodes) {
       for (const [, name] of (node.prompt ?? '').matchAll(/@([a-z_]+)/g))
         expect(tools.has(name ?? ''), name).toBe(true);
@@ -141,5 +147,45 @@ describe('callerGraph', () => {
   it('is what the caller-graph agent body carries', () => {
     const llm = agentBody('caller-graph', setup).agent_config.tasks[0]?.tools_config.llm_agent;
     expect(llm?.agent_type).toBe('graph_agent');
+  });
+});
+
+describe('the owner line and the handoff', () => {
+  it('gives the owner agent only approve_quote, and its own prompt', () => {
+    const owner = agentBody('owner', setup);
+    const tools = owner.agent_config.tasks[0]?.tools_config.api_tools;
+    expect(tools?.tools.map((t) => t.name)).toEqual(['approve_quote']);
+    expect(owner.agent_prompts.task_1.system_prompt).toContain('REQUEST_REF: {request_ref}');
+    expect(owner.agent_prompts.task_1.system_prompt).toContain('{choices}');
+  });
+
+  it("adds Bolna's transfer tool to the real Caller only, with the owner's number", () => {
+    const withOwner = { ...setup, ownerPhone: '+919800000009' };
+    const caller = agentBody('caller', withOwner).agent_config.tasks[0]?.tools_config.api_tools;
+    const transfer = caller?.tools.find((t) => t.name === 'transfer_to_owner');
+    expect(transfer).toMatchObject({ key: 'transfer_call' });
+    expect(JSON.parse(caller?.tools_params.transfer_to_owner?.param ?? '{}')).toEqual({
+      call_transfer_number: '+919800000009',
+      call_sid: '%(call_sid)s',
+    });
+    for (const kind of ['practice', 'desk', 'owner'] as const) {
+      const other = agentBody(kind, withOwner).agent_config.tasks[0]?.tools_config.api_tools;
+      expect(
+        other?.tools.some((t) => t.name === 'transfer_to_owner'),
+        kind,
+      ).toBe(false);
+    }
+    expect(
+      agentBody('caller', setup).agent_config.tasks[0]?.tools_config.api_tools.tools.some(
+        (t) => t.name === 'transfer_to_owner',
+      ),
+    ).toBe(false);
+  });
+
+  it("keeps Bolna's own calling hours on the supplier calls", () => {
+    expect(agentBody('caller', setup).agent_config).toMatchObject({
+      calling_guardrails: { call_start_hour: 10, call_end_hour: 19 },
+    });
+    expect(agentBody('desk', setup).agent_config).not.toHaveProperty('calling_guardrails');
   });
 });

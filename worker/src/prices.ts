@@ -1,5 +1,5 @@
 // Price memory: every past order's best landed price per item, so a buyer sees whether today's
-// bhaav is good. Practice orders never count.
+// bhaav is good. Practice and simulated orders never count.
 
 import type { PricePoint, PriceSeries, Unit } from '@bhaav/shared';
 import { and, desc, eq, isNotNull, lt, type SQL, sql } from 'drizzle-orm';
@@ -38,6 +38,7 @@ async function rowsWhere(db: Db, extra?: SQL) {
     .where(
       and(
         eq(requests.isPractice, false),
+        eq(requests.isSimulation, false),
         isNotNull(requests.item),
         isNotNull(requests.unit),
         extra,

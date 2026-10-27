@@ -20,7 +20,7 @@ import {
 } from './auth';
 import { type Execution, findCallRef, getExecution, mintWebSession } from './bolna';
 import { allowedNumbersFor, type Db, recordEvent } from './db/context';
-import { calls, events, loginAttempts, quotes, requests, suppliers } from './db/schema';
+import { calls, events, loginAttempts, quotes, requests, suppliers, turns } from './db/schema';
 import {
   advance,
   advanceWaiting,
@@ -37,15 +37,16 @@ import {
   waitingReason,
 } from './dialler';
 import { newId } from './ids';
-import { type ChatRequest, catchLies } from './llm';
+import { type CatcherDeps, type ChatRequest, catchLies, readCompletion } from './llm';
 import {
+  approveQuote,
   isPastDate,
   normalizeDate,
   normalizePhone,
   normalizeUnit,
   orderView,
-  todayWords,
 } from './orders';
+import { approveByVoice, callOwnerToOrder, deskUserData, ownerEnv, ownerResultsDue } from './owner';
 import {
   createPractice,
   PERSONAS,
@@ -54,10 +55,35 @@ import {
   webCallsLastHour,
 } from './practice';
 import { historyFor, priceSeries } from './prices';
-import { doNotCall, type Params, saveQuote, startOrder, updateOrder } from './tools';
+import { breakStats, proofStats } from './proof';
+import { listSchedules, pauseSchedule, repeatOrder, runSchedules, setSchedule } from './schedule';
+import { createSimulation, simulationStep } from './simulate';
+import { callBackLater, doNotCall, type Params, saveQuote, startOrder, updateOrder } from './tools';
 
 type Env = { Bindings: Cloudflare.Env };
 const dbOf = (c: Context<Env>): Db => drizzle(c.env.DB);
+
+/** The lie-catcher's settings for one request: Groq, its models, and the database. */
+function catcherDeps(c: Context<Env>, db: Db): CatcherDeps {
+  return {
+    upstream: (body, signal) =>
+      fetch(`${c.env.GROQ_BASE_URL}/chat/completions`, {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${c.env.GROQ_API_KEY}`,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify(body),
+        signal,
+      }),
+    models: c.env.GROQ_MODELS.split(',')
+      .map((m) => m.trim())
+      .filter(Boolean),
+    allowedFor: (ref) => allowedNumbersFor(db, ref),
+    record: (event) => recordEvent(db, event),
+    waitUntil: (promise) => c.executionCtx.waitUntil(promise),
+  };
+}
 
 /** An order for the screens, with why it is waiting (calling hours, another call, a retry). */
 async function viewOf(c: Context<Env>, db: Db, id: string) {
@@ -324,20 +350,8 @@ api.post('/requests/:id/start', async (c) => {
 api.post('/requests/:id/approve', json(z.object({ quoteId: z.string() })), async (c) => {
   const db = dbOf(c);
   const id = c.req.param('id');
-  const view = await viewOf(c, db, id);
-  if (!view) return c.json({ error: 'No such order.' }, 404);
-  if (view.order.status !== 'done')
-    return c.json({ error: 'Approve once all calls are finished.' }, 409);
-  const { quoteId } = c.req.valid('json');
-  if (!view.quotes.some((q) => q.id === quoteId))
-    return c.json({ error: 'That quote is not on this order.' }, 400);
-  await db
-    .update(requests)
-    .set({ status: 'approved', approvedQuoteId: quoteId })
-    .where(and(eq(requests.id, id), eq(requests.status, 'done')));
-  await db
-    .insert(events)
-    .values({ id: newId('evt'), requestId: id, type: 'approved', detail: { quoteId } });
+  const result = await approveQuote(db, id, c.req.valid('json').quoteId, 'screen');
+  if (!result.ok) return c.json({ error: result.error }, result.status);
   return c.json(await viewOf(c, db, id));
 });
 
@@ -362,7 +376,7 @@ api.get('/requests/:id/history', async (c) => {
     .where(eq(requests.id, c.req.param('id')))
     .get();
   if (!request) return c.json({ error: 'No such order.' }, 404);
-  return c.json(request.isPractice ? [] : await historyFor(db, request));
+  return c.json(request.isPractice || request.isSimulation ? [] : await historyFor(db, request));
 });
 
 api.post(
@@ -401,14 +415,7 @@ api.post(
         if ((await webCallsLastHour(db)) >= WEB_CALLS_PER_HOUR) return busy();
         const session = await mintWebSession(bolna, {
           agentId: c.env.BOLNA_DESK_AGENT_ID,
-          userData: {
-            request_ref: request.id,
-            buyer_name: request.buyerName || 'there',
-            // The Desk turns "Friday tak" into a date, so it needs today's (Bolna's own
-            // {current_date} follows the caller's timezone, which a browser call may not have).
-            today: todayWords(),
-            timezone: 'Asia/Kolkata',
-          },
+          userData: deskUserData(request),
         });
         await db.insert(events).values({
           id: newId('evt'),
@@ -460,6 +467,142 @@ api.post(
   },
 );
 
+// ---- The owner line: Bhaav phones the owner -------------------------------------------
+
+/** The owner's number and whether to call them with the result; allowed at any stage. */
+api.post(
+  '/requests/:id/owner',
+  json(
+    z.object({
+      buyerPhone: z.string().trim().max(20).nullable().optional(),
+      ownerUpdates: z.boolean().optional(),
+    }),
+  ),
+  async (c) => {
+    const db = dbOf(c);
+    const id = c.req.param('id');
+    const request = await db.select().from(requests).where(eq(requests.id, id)).get();
+    if (!request) return c.json({ error: 'No such order.' }, 404);
+    if (request.isPractice || request.isSimulation)
+      return c.json({ error: 'Practice and simulated orders never call anyone.' }, 400);
+    const body = c.req.valid('json');
+    const patch: Partial<typeof requests.$inferInsert> = {};
+    if (body.buyerPhone !== undefined) {
+      if (body.buyerPhone === null || body.buyerPhone === '') patch.buyerPhone = null;
+      else {
+        const phone = normalizePhone(body.buyerPhone);
+        if (!phone)
+          return c.json({ error: 'Use a 10-digit Indian mobile number, or +country code.' }, 400);
+        // The owner is called like a supplier, so the same approved list guards it.
+        if (!mayCall(parseAllowlist(c.env.SUPPLIER_ALLOWLIST), phone))
+          return c.json(
+            {
+              error:
+                'Bhaav may only call numbers on its approved list. Add yours to SUPPLIER_ALLOWLIST.',
+            },
+            403,
+          );
+        patch.buyerPhone = phone;
+      }
+    }
+    if (body.ownerUpdates !== undefined) patch.ownerUpdates = body.ownerUpdates;
+    if (Object.keys(patch).length > 0)
+      await db.update(requests).set(patch).where(eq(requests.id, id));
+    return c.json(await viewOf(c, db, id));
+  },
+);
+
+// "Call me": Bhaav phones the owner to take the order by voice.
+api.post('/requests/:id/call-me', async (c) => {
+  const db = dbOf(c);
+  const id = c.req.param('id');
+  const result = await callOwnerToOrder(ownerEnv(c.env), db, id);
+  if (!result.ok) return c.json({ error: result.message }, 409);
+  return c.json({ message: result.message, view: await viewOf(c, db, id) });
+});
+
+// ---- Repeat orders and weekly orders -----------------------------------------------------
+
+api.post('/requests/:id/repeat', async (c) => {
+  const result = await repeatOrder(dbOf(c), c.req.param('id'));
+  if (!result.ok) return c.json({ error: result.error }, result.status);
+  return c.json({ id: result.id }, 201);
+});
+
+api.post(
+  '/requests/:id/schedule',
+  json(
+    z.object({
+      weekday: z.number().int().min(0).max(6),
+      hour: z.number().int().min(0).max(23),
+      callOwnerFirst: z.boolean().default(false),
+    }),
+  ),
+  async (c) => {
+    const db = dbOf(c);
+    const id = c.req.param('id');
+    const body = c.req.valid('json');
+    const { from, to } = diallerEnv(c.env).callHours;
+    if (body.hour < from || body.hour >= to)
+      return c.json(
+        { error: `Pick an hour between ${from}:00 and ${to - 1}:00, when suppliers are called.` },
+        400,
+      );
+    if (body.callOwnerFirst) {
+      const request = await db.select().from(requests).where(eq(requests.id, id)).get();
+      if (!request?.buyerPhone)
+        return c.json(
+          { error: 'Add your mobile number on the order first, so Bhaav can call you.' },
+          400,
+        );
+    }
+    const schedule = await setSchedule(db, id, body);
+    if (!schedule) return c.json({ error: 'Only a real order can repeat every week.' }, 400);
+    return c.json(await viewOf(c, db, id));
+  },
+);
+
+api.get('/schedules', async (c) => c.json(await listSchedules(dbOf(c))));
+
+api.post('/schedules/:id/active', json(z.object({ active: z.boolean() })), async (c) => {
+  const done = await pauseSchedule(dbOf(c), c.req.param('id'), c.req.valid('json').active);
+  return done ? c.json({ ok: true }) : c.json({ error: 'No such weekly order.' }, 404);
+});
+
+// ---- Proof, Break Bhaav and the simulation ------------------------------------------------
+
+api.get('/proof', async (c) => c.json(await proofStats(dbOf(c))));
+api.get('/break-bhaav', async (c) => c.json(await breakStats(dbOf(c))));
+
+api.post('/simulations', async (c) => {
+  const result = await createSimulation(dbOf(c));
+  if (!result.ok) return c.json({ error: result.error, id: result.id ?? null }, result.status);
+  return c.json({ id: result.id }, 201);
+});
+
+// One step: start the next call, play one exchange, or end a call. The browser repeats it.
+api.post('/simulations/:id/step', async (c) => {
+  const db = dbOf(c);
+  const id = c.req.param('id');
+  const deps = catcherDeps(c, db);
+  const step = await simulationStep(
+    {
+      chat: async (req) => {
+        // The turn is written before the step answers, so the screen shows it at once.
+        const pending: Promise<unknown>[] = [];
+        const res = await catchLies(req, { ...deps, waitUntil: (p) => pending.push(p) });
+        const reply = await readCompletion(res);
+        await Promise.all(pending);
+        return reply;
+      },
+    },
+    db,
+    id,
+  );
+  if (step === 'not-a-simulation') return c.json({ error: 'No such simulation.' }, 404);
+  return c.json({ step, view: await viewOf(c, db, id) });
+});
+
 api.get('/practice/personas', (c) => c.json(personaCards()));
 
 /** After a practice call: what Bhaav said, what it saved, and anything the lie-catcher stopped. */
@@ -483,15 +626,27 @@ api.get('/practice/:callId', async (c) => {
       // The transcript can lag the call by a few seconds; the screen polls again.
     }
   }
-  const [callEvents, saved] = await Promise.all([
+  const [callEvents, saved, said] = await Promise.all([
     db.select().from(events).where(eq(events.callId, call.id)).all(),
     db.select().from(quotes).where(eq(quotes.callId, call.id)).all(),
+    db.select().from(turns).where(eq(turns.callId, call.id)).orderBy(turns.createdAt).all(),
   ]);
   return c.json({
     callId: call.id,
     status: call.status,
     bestOffer: call.bestOfferSaid,
     transcript: call.transcript,
+    // Turn by turn as the lie-catcher saw it: there as the call happens, before Bolna's transcript.
+    turns: said.map((t) => ({
+      id: t.id,
+      callId: t.callId,
+      heard: t.heard,
+      said: t.said,
+      stopped: t.stopped,
+      numbers: t.numbers,
+      thinkMs: t.thinkMs,
+      createdAt: t.createdAt.getTime(),
+    })),
     blocked: callEvents
       .filter((e) => e.type === 'blocked' || e.type === 'tool_blocked')
       .map((e) => ({ type: e.type, detail: e.detail, createdAt: e.createdAt.getTime() })),
@@ -521,27 +676,9 @@ const chatRequest = z.looseObject({
   messages: z.array(z.looseObject({ role: z.string(), content: z.unknown().optional() })).min(1),
 });
 
-app.post('/v1/chat/completions', llmAuth, json(chatRequest), (c) => {
-  const db = dbOf(c);
-  return catchLies(c.req.valid('json') as ChatRequest, {
-    upstream: (body, signal) =>
-      fetch(`${c.env.GROQ_BASE_URL}/chat/completions`, {
-        method: 'POST',
-        headers: {
-          authorization: `Bearer ${c.env.GROQ_API_KEY}`,
-          'content-type': 'application/json',
-        },
-        body: JSON.stringify(body),
-        signal,
-      }),
-    models: c.env.GROQ_MODELS.split(',')
-      .map((m) => m.trim())
-      .filter(Boolean),
-    allowedFor: (ref) => allowedNumbersFor(db, ref),
-    record: (event) => recordEvent(db, event),
-    waitUntil: (promise) => c.executionCtx.waitUntil(promise),
-  });
-});
+app.post('/v1/chat/completions', llmAuth, json(chatRequest), (c) =>
+  catchLies(c.req.valid('json') as ChatRequest, catcherDeps(c, dbOf(c))),
+);
 
 // ---- Bolna: custom functions ------------------------------------------------------------
 
@@ -565,6 +702,13 @@ tools.on(['GET', 'POST'], '/save_quote', async (c) =>
 );
 tools.on(['GET', 'POST'], '/do_not_call', async (c) =>
   c.json(await doNotCall(dbOf(c), await paramsOf(c))),
+);
+tools.on(['GET', 'POST'], '/call_back_later', async (c) =>
+  c.json(await callBackLater(dbOf(c), await paramsOf(c), diallerEnv(c.env).callHours)),
+);
+// The owner line: the owner's spoken, read-back choice becomes the approval.
+tools.on(['GET', 'POST'], '/approve_quote', async (c) =>
+  c.json(await approveByVoice(ownerEnv(c.env), dbOf(c), await paramsOf(c))),
 );
 tools.on(['GET', 'POST'], '/start_calls', async (c) => {
   const db = dbOf(c);
@@ -599,9 +743,14 @@ app.post('/webhooks/bolna/:secret', async (c) => {
   if (!execution || typeof execution.status !== 'string') return c.json({ ok: true });
   const db = dbOf(c);
   const finished = await applyExecution(db, execution, findCallRef(execution.context_details));
-  // The line is free: this order's next call, then any order waiting for it.
+  // The line is free: this order's next call, then any order waiting for it, then any owner
+  // waiting to hear a finished order's result.
   if (finished?.channel === 'phone')
-    c.executionCtx.waitUntil(advanceWaiting(diallerEnv(c.env), db, finished.requestId));
+    c.executionCtx.waitUntil(
+      advanceWaiting(diallerEnv(c.env), db, finished.requestId).then(() =>
+        ownerResultsDue(ownerEnv(c.env), db),
+      ),
+    );
   return c.json({ ok: true });
 });
 
@@ -625,9 +774,12 @@ export async function sweep(env: Cloudflare.Env): Promise<void> {
   }
   await failOrphanedCalls(db, 5 * 60_000);
   await giveUpOnStuckCalls(db);
-  // Every order with no live call takes its next step: after a lost webhook, a retry's minute,
-  // the start of calling hours, or another order's call ending.
+  // This week's orders from weekly schedules, then every order with no live call takes its next
+  // step (after a lost webhook, a retry's minute, a callback's time, the start of calling hours,
+  // or another order's call ending), then owners hear finished results.
+  await runSchedules(dialler, ownerEnv(env), db).catch(() => undefined);
   await advanceWaiting(dialler, db);
+  await ownerResultsDue(ownerEnv(env), db).catch(() => undefined);
   await db
     .delete(loginAttempts)
     .where(lt(loginAttempts.createdAt, new Date(Date.now() - LOGIN_ATTEMPTS_KEPT_MS)));

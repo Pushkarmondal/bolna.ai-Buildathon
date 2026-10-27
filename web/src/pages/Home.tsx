@@ -1,7 +1,15 @@
 import { type FormEvent, useState } from 'react';
 import { useNavigate } from 'react-router';
-import { api, lastOrder } from '../api';
-import { ChartLineUp, ChatCircleText, Handshake, ShieldCheck, Storefront } from '../icons';
+import { api, lastOrder, startSimulation, useSchedules } from '../api';
+import {
+  CalendarCheck,
+  ChartLineUp,
+  ChatCircleText,
+  Handshake,
+  PlayCircle,
+  ShieldCheck,
+  Storefront,
+} from '../icons';
 import {
   Button,
   ButtonLink,
@@ -115,7 +123,10 @@ export function HomePage() {
           {previous && <MoreLink to={`/r/${previous}`}>Go back to your last order</MoreLink>}
           <MoreLink to="/play">Be the supplier</MoreLink>
         </div>
+        <WatchButton className="mt-6" />
       </section>
+
+      <WeeklyOrders />
 
       <section aria-labelledby="promise">
         <h2 id="promise" className="mb-6 text-[32px] font-bold leading-tight sm:text-[40px]">
@@ -162,14 +173,83 @@ export function HomePage() {
           </span>
           <h2 className="mt-5 text-[24px] font-bold leading-tight">Judging Bhaav?</h2>
           <p className="mt-2 text-[17px] text-muted-fg">
-            Take Bhaav's call as a supplier and try to make it say a price it can't prove. The
-            lie-catcher shows what it stopped.
+            Watch a full order play out in two minutes, then take Bhaav's call as a supplier and try
+            to make it say a price it can't prove.
           </p>
-          <ButtonLink to="/play" variant="secondary" className="mt-6 self-start">
-            Be the supplier
-          </ButtonLink>
+          <div className="mt-6 flex flex-wrap gap-2">
+            <ButtonLink to="/play" variant="secondary">
+              Be the supplier
+            </ButtonLink>
+            <ButtonLink to="/proof" variant="ghost">
+              See the proof
+            </ButtonLink>
+          </div>
         </div>
       </section>
     </div>
+  );
+}
+
+/**
+ * "Watch a full order": starts a simulation (or opens the one running) and goes to it. Pretend
+ * suppliers, the real AI and lie-catcher; labelled simulation everywhere.
+ */
+export function WatchButton({ className = '' }: { className?: string }) {
+  const navigate = useNavigate();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  async function watch() {
+    setBusy(true);
+    setError(null);
+    try {
+      navigate(`/r/${await startSimulation()}`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not start the simulation.');
+      setBusy(false);
+    }
+  }
+  return (
+    <div className={`flex flex-col items-center gap-2 ${className}`}>
+      <Button variant="secondary" icon={PlayCircle} busy={busy} onClick={watch}>
+        Watch a full order (2 minutes)
+      </Button>
+      {error && (
+        <p className="text-sm text-danger" role="alert">
+          {error}
+        </p>
+      )}
+    </div>
+  );
+}
+
+const WEEKDAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+/** Weekly orders, if there are any: what repeats when, with a way to each. */
+function WeeklyOrders() {
+  const schedules = useSchedules();
+  const list = (schedules.data ?? []).filter((s) => s.active);
+  if (list.length === 0) return null;
+  return (
+    <section aria-labelledby="weekly" className="surface p-6 sm:p-8">
+      <h2
+        id="weekly"
+        className="mb-4 flex items-center gap-2.5 text-[24px] font-bold leading-tight"
+      >
+        <CalendarCheck size={24} className="text-muted-fg" aria-hidden />
+        Your weekly orders
+      </h2>
+      <ul className="divide-y divide-border">
+        {list.map((s) => (
+          <li key={s.id} className="flex flex-wrap items-center justify-between gap-3 py-3">
+            <span className="font-medium">{s.item ?? 'An order'}</span>
+            <span className="tabular text-[15px] text-muted-fg">
+              Every {WEEKDAY_NAMES[s.weekday]} at {s.hour}:00
+              {s.callOwnerFirst ? ', phoning you first' : ''}
+            </span>
+            <MoreLink to={`/r/${s.requestId}/result`}>Open</MoreLink>
+          </li>
+        ))}
+      </ul>
+    </section>
   );
 }

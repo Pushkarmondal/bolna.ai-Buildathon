@@ -3,9 +3,18 @@
 import type { Persona } from '@bhaav/shared';
 import { useQuery } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
-import { api, type PracticeReview, usePersonas } from '../api';
-import { rupees } from '../format';
-import { ArrowRight, Lightbulb, PhoneDisconnect, ShieldCheck, Storefront, Timer } from '../icons';
+import { api, type PracticeReview, useBreakStats, usePersonas } from '../api';
+import { rupees, timeLabel } from '../format';
+import {
+  ArrowRight,
+  Lightbulb,
+  Medal,
+  PhoneDisconnect,
+  ShieldCheck,
+  Storefront,
+  Timer,
+} from '../icons';
+import { Transcript, TranscriptLegend } from '../transcript';
 import {
   Button,
   ButtonLink,
@@ -17,6 +26,7 @@ import {
   VoiceMeter,
 } from '../ui';
 import { useWebCall } from '../webcall';
+import { WatchButton } from './Home';
 
 const LIMIT_SECONDS = 120;
 
@@ -45,7 +55,9 @@ export function PlayPage() {
     queryKey: ['practice', callId],
     queryFn: () => api<PracticeReview>(`/api/practice/${callId}`),
     enabled: Boolean(callId) && call.state === 'ended',
-    refetchInterval: (q) => (q.state.data?.transcript ? false : 3000),
+    // Until Bolna's own transcript arrives, for two minutes at most.
+    refetchInterval: (q) =>
+      q.state.data?.transcript || q.state.dataUpdateCount > 40 ? false : 3000,
   });
 
   function take(persona: Persona) {
@@ -61,6 +73,8 @@ export function PlayPage() {
         sub="Pick a supplier to play. Bhaav calls you in the browser holding a real competing offer. Try to make it say a price it can't prove."
         aside={<Pill tone="warn">Pretend supplier, no real calls</Pill>}
       />
+
+      <Scoreboard />
 
       {chosen && (call.state !== 'idle' || call.error) && (
         <div className="mb-6">
@@ -120,7 +134,7 @@ export function PlayPage() {
         <Review
           review={review.data}
           requestId={call.minted?.requestId}
-          loading={!review.data?.transcript}
+          loading={!review.data?.transcript && !review.data?.turns?.length}
         />
       )}
 
@@ -157,6 +171,7 @@ export function PlayPage() {
         Calls stop after 2 minutes. Practice orders are labelled practice, never call anyone, and
         never count in price memory.
       </p>
+      <WatchButton className="mt-8" />
     </>
   );
 }
@@ -240,7 +255,12 @@ function Review({
         )}
       </Card>
       <Card title="Transcript">
-        {loading ? (
+        {review?.turns && review.turns.length > 0 ? (
+          <>
+            <TranscriptLegend />
+            <Transcript turns={review.turns} otherName="You" />
+          </>
+        ) : loading ? (
           <p className="text-muted-fg">Waiting for Bolna's transcript, usually a few seconds…</p>
         ) : (
           <ol className="flex max-h-96 flex-col gap-2 overflow-y-auto text-sm">
@@ -253,5 +273,77 @@ function Review({
         )}
       </Card>
     </div>
+  );
+}
+
+/**
+ * "Break Bhaav": every judge's tries and what the lie-catcher did with them, newest first. Possible
+ * slips are counted and shown, not hidden: a number only the judge said, stated by Bhaav.
+ */
+function Scoreboard() {
+  const stats = useBreakStats();
+  const s = stats.data;
+  if (!s) return null;
+  return (
+    <section
+      aria-labelledby="break-bhaav"
+      className="mb-6 grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]"
+    >
+      <div className="surface p-6">
+        <h2 id="break-bhaav" className="flex items-center gap-2.5 text-[21px] font-semibold">
+          <Medal size={22} className="text-muted-fg" aria-hidden />
+          Break Bhaav
+        </h2>
+        <p className="mt-1 text-muted-fg">Every judge's tries so far.</p>
+        <dl className="mt-4 grid grid-cols-3 gap-3 text-center">
+          <div className="rounded-2xl bg-bg p-3">
+            <dt className="text-xs text-muted-fg">Practice calls</dt>
+            <dd className="tabular text-[28px] font-bold">{s.calls}</dd>
+          </div>
+          <div className="rounded-2xl bg-danger-soft p-3 text-danger">
+            <dt className="text-xs">Lies stopped</dt>
+            <dd className="tabular text-[28px] font-bold">{s.stopped}</dd>
+          </div>
+          <div
+            className={`rounded-2xl p-3 ${s.possibleSlips ? 'bg-warn-soft text-warn' : 'bg-success-soft text-success'}`}
+          >
+            <dt className="text-xs">Possible slips</dt>
+            <dd className="tabular text-[28px] font-bold">{s.possibleSlips}</dd>
+          </div>
+        </dl>
+        <p className="mt-3 text-sm text-muted-fg">
+          A possible slip is Bhaav stating a number only you said. It is counted here so a person
+          can check it, never hidden.
+        </p>
+      </div>
+      <div className="surface p-6">
+        <h2 className="text-[21px] font-semibold">Hall of tricks</h2>
+        {s.tricks.length === 0 ? (
+          <p className="mt-2 text-muted-fg">
+            Nobody has caught Bhaav out yet. Be the first to try.
+          </p>
+        ) : (
+          <ul className="mt-3 flex max-h-80 flex-col gap-3 overflow-y-auto pr-1">
+            {s.tricks.map((t) => (
+              <li key={`${t.callId}-${t.createdAt}`} className="rounded-2xl bg-bg p-4 text-[15px]">
+                <p className="text-xs text-muted-fg">
+                  {t.persona} · <span className="tabular">{timeLabel(t.createdAt)}</span>
+                </p>
+                {t.heard && <p className="mt-1">Judge: “{t.heard}”</p>}
+                {t.stopped && (
+                  <p className="mt-1 text-danger">
+                    Bhaav nearly said:{' '}
+                    <span className="line-through decoration-2">“{t.stopped}”</span>
+                  </p>
+                )}
+                <p className={`mt-1 ${t.slip ? 'text-warn' : 'text-success'}`}>
+                  {t.slip ? 'Possible slip: ' : 'Said instead: '}“{t.said}”
+                </p>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </section>
   );
 }

@@ -57,6 +57,8 @@ async function readReply(res: Response) {
 
 function harness(responses: Array<Response | Error>, allowed: number[] = []) {
   const events: CatcherEvent[] = [];
+  // Every turn is also written to the transcript; kept apart, so the events checks stay exact.
+  const turns: Extract<CatcherEvent, { type: 'turn' }>[] = [];
   const pending: Promise<unknown>[] = [];
   const sent: ChatRequest[] = [];
   const refs: Array<string | null> = [];
@@ -74,11 +76,12 @@ function harness(responses: Array<Response | Error>, allowed: number[] = []) {
       return allowed;
     },
     record: async (e) => {
-      events.push(e);
+      if (e.type === 'turn') turns.push(e);
+      else events.push(e);
     },
     waitUntil: (p) => pending.push(p),
   };
-  return { deps, events, sent, refs, settle: () => Promise.all(pending) };
+  return { deps, events, turns, sent, refs, settle: () => Promise.all(pending) };
 }
 
 const request = (supplierSays = 'Haan ji, boliye.'): ChatRequest => ({
@@ -386,6 +389,61 @@ describe('catchLies: tool calls', () => {
     expect(reply.finish).toBe('stop');
     await h.settle();
     expect(h.events[0]).toMatchObject({ type: 'tool_blocked', tool: 'save_quote' });
+  });
+});
+
+describe('catchLies: the live transcript', () => {
+  it('writes each turn down, with every number tagged by where it came from', async () => {
+    const h = harness(
+      [upstreamOf(['Toh ₹34 per kilo, sahi hai? ', 'Mere paas ₹31 ka asli offer hai.'])],
+      [31],
+    );
+    await readReply(await catchLies(request('34 rupaye kilo, delivery free'), h.deps));
+    await h.settle();
+    expect(h.turns).toHaveLength(1);
+    expect(h.turns[0]).toMatchObject({
+      callRef: 'call_abc',
+      heard: '34 rupaye kilo, delivery free',
+      said: 'Toh ₹34 per kilo, sahi hai? Mere paas ₹31 ka asli offer hai.',
+      stopped: null,
+      numbers: [
+        { value: 34, source: 'heard', question: true },
+        { value: 31, source: 'book', question: false },
+      ],
+    });
+    expect(h.turns[0]?.thinkMs).toEqual(expect.any(Number));
+  });
+
+  it('keeps the sentence it stopped, and what was said instead', async () => {
+    const h = harness([upstreamOf(['Mere paas ₹27 ka offer hai. '])], [30]);
+    await readReply(await catchLies(request('Aur kam karo'), h.deps));
+    await h.settle();
+    expect(h.turns[0]).toMatchObject({
+      said: SAFE_LINE,
+      stopped: 'Mere paas ₹27 ka offer hai.',
+      numbers: [{ value: 27, source: 'stopped' }],
+    });
+  });
+
+  it("marks a turn after a tool's result as hearing nothing new", async () => {
+    const h = harness([upstreamOf(['Dhanyavaad ji.'])]);
+    const afterTool: ChatRequest = {
+      messages: [
+        ...request('Haan, 32 sahi hai').messages,
+        { role: 'assistant', content: null, tool_calls: [{}] },
+        { role: 'tool', tool_call_id: 'tc1', content: '{"ok":true}' },
+      ],
+    };
+    await readReply(await catchLies(afterTool, h.deps));
+    await h.settle();
+    expect(h.turns[0]).toMatchObject({ heard: null, said: 'Dhanyavaad ji.' });
+  });
+
+  it('writes a turn even when no model answered', async () => {
+    const h = harness([new Response('x', { status: 503 })]);
+    await readReply(await catchLies(request('Hello?'), { ...h.deps, models: ['m1'] }));
+    await h.settle();
+    expect(h.turns[0]).toMatchObject({ heard: 'Hello?', said: SAFE_LINE });
   });
 });
 

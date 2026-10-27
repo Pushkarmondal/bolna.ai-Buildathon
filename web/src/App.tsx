@@ -3,7 +3,7 @@ import { type FormEvent, type ReactNode, Suspense, useState } from 'react';
 import { NavLink, Outlet, useLocation, useRouteError } from 'react-router';
 import { ApiError, api, useAuth, useHealth } from './api';
 import type { Icon } from './icons';
-import { ArrowClockwise, ChartLineUp, Flask, House, LockKey, Storefront } from './icons';
+import { ArrowClockwise, ChartLineUp, House, LockKey, SealCheck, Storefront } from './icons';
 import {
   Button,
   Field,
@@ -19,7 +19,7 @@ const NAV: Array<{ to: string; label: string; short: string; icon: Icon }> = [
   { to: '/', label: 'New order', short: 'Order', icon: House },
   { to: '/prices', label: 'Price memory', short: 'Prices', icon: ChartLineUp },
   { to: '/play', label: 'Be the supplier', short: 'Practice', icon: Storefront },
-  { to: '/bench', label: 'Test bench', short: 'Bench', icon: Flask },
+  { to: '/proof', label: 'Proof', short: 'Proof', icon: SealCheck },
 ];
 
 function ServerStatus() {

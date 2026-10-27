@@ -6,7 +6,7 @@ import type { DrizzleD1Database } from 'drizzle-orm/d1';
 import { newId } from '../ids';
 import type { CatcherEvent } from '../llm';
 import { numbersIn } from '../numbers';
-import { calls, events, quotes, requests } from './schema';
+import { calls, events, quotes, requests, turns } from './schema';
 
 export type Db = DrizzleD1Database<Record<string, unknown>>;
 
@@ -46,7 +46,10 @@ export async function allowedNumbersFor(db: Db, ref: string | null): Promise<num
   return values;
 }
 
-/** Appends a lie-catcher event; a reference that matches nothing is kept in the detail only. */
+/**
+ * Appends a lie-catcher event; a reference that matches nothing is kept in the detail only. A
+ * turn goes to the transcript (`turns`) instead of the events log.
+ */
 export async function recordEvent(db: Db, event: CatcherEvent): Promise<void> {
   let requestId: string | null = null;
   let callId: string | null = null;
@@ -65,6 +68,19 @@ export async function recordEvent(db: Db, event: CatcherEvent): Promise<void> {
       .get();
     requestId = call?.requestId ?? null;
     callId = call?.id ?? null;
+  }
+  if (event.type === 'turn') {
+    await db.insert(turns).values({
+      id: newId('turn'),
+      requestId,
+      callId,
+      heard: event.heard,
+      said: event.said,
+      stopped: event.stopped,
+      numbers: event.numbers,
+      thinkMs: event.thinkMs,
+    });
+    return;
   }
   const { type, ...detail } = event;
   await db.insert(events).values({ id: newId('evt'), type, requestId, callId, detail });

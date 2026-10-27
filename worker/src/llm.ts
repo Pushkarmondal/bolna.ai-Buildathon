@@ -1,7 +1,8 @@
 // The custom LLM endpoint Bolna calls on every turn. It asks Groq for the reply, then checks each
 // sentence before passing it on: a sentence with a number Bhaav can't back up is never spoken.
 
-import { allowedSet, numbersIn, parseAmount, unbackedNumbers } from './numbers';
+import type { SpokenNumber } from '@bhaav/shared';
+import { allowedSet, findNumbers, numbersIn, parseAmount, unbackedNumbers } from './numbers';
 
 /** How long one model may take to start answering before the next one is asked. */
 const FIRST_BYTE_MS = 2500;
@@ -30,7 +31,17 @@ export type CatcherEvent =
   | { type: 'blocked'; callRef: string | null; sentence: string; unbacked: number[] }
   | { type: 'tool_blocked'; callRef: string | null; tool: string; arguments: string }
   | { type: 'model_switch'; callRef: string | null; model: string; status: number }
-  | { type: 'upstream_down'; callRef: string | null; statuses: number[] };
+  | { type: 'upstream_down'; callRef: string | null; statuses: number[] }
+  | {
+      type: 'turn';
+      callRef: string | null;
+      /** The other person's latest words; null when the turn followed a tool's result. */
+      heard: string | null;
+      said: string;
+      stopped: string | null;
+      numbers: SpokenNumber[];
+      thinkMs: number | null;
+    };
 
 export interface CatcherDeps {
   /** Sends one OpenAI-style chat-completions request upstream (Groq); the signal cancels it. */
@@ -253,7 +264,11 @@ function sseResponse(body: ReadableStream<Uint8Array>): Response {
 
 /** Handles one chat-completions request from Bolna and returns the checked reply as an SSE stream. */
 export async function catchLies(req: ChatRequest, deps: CatcherDeps): Promise<Response> {
+  const started = Date.now();
   const callRef = callRefOf(req.messages);
+  // For the live transcript: what the other person just said (nothing, after a tool's result).
+  const last = req.messages.at(-1);
+  const heardNow = last?.role === 'user' ? textOf(last.content).trim() || null : null;
   // The Desk talks to the buyer about their own order, so only prices are checked there; dates
   // and quantities it reads back may not be saved yet.
   const desk = callRef?.startsWith('req_') ?? false;
@@ -314,12 +329,22 @@ export async function catchLies(req: ChatRequest, deps: CatcherDeps): Promise<Re
   const sse = new Sse(model);
   if (!upstream?.body) {
     record({ type: 'upstream_down', callRef, statuses });
+    record({
+      type: 'turn',
+      callRef,
+      heard: heardNow,
+      said: SAFE_LINE,
+      stopped: null,
+      numbers: [],
+      thinkMs: Date.now() - started,
+    });
     return sseResponse(sse.single(SAFE_LINE));
   }
 
   const book = await bookNumbers;
   // Numbers Bhaav can prove from the quote book, and those plus what the other person said.
   const proven = allowedSet(book);
+  const heardSet = allowedSet(heard);
   const allowed = allowedSet([...book, ...heard]);
   const reader = upstream.body.pipeThrough(new TextDecoderStream()).getReader();
   const stallMs = deps.stallMs ?? STALL_MS;
@@ -333,17 +358,30 @@ export async function catchLies(req: ChatRequest, deps: CatcherDeps): Promise<Re
         let spoke = false;
         let finish: string | null = null;
         const toolDeltas: unknown[][] = [];
+        // The turn as it was spoken, for the live transcript.
+        const spoken: string[] = [];
+        const tags: SpokenNumber[] = [];
+        let stopped: string | null = null;
+        let thinkMs: number | null = null;
 
         const emit = (delta: Record<string, unknown>) => {
           controller.enqueue(sse.chunk(spoke ? delta : { role: 'assistant', ...delta }));
           spoke = true;
+          if (typeof delta.content === 'string' && delta.content !== '') {
+            spoken.push(delta.content);
+            thinkMs ??= Date.now() - started;
+          }
         };
         const say = (sentence: string) => {
           if (muted || sentence.trim() === '') return;
+          const question = sentence.trim().endsWith('?');
           const found = unbackedNumbers(sentence, claimsAnOffer(sentence) ? proven : allowed);
           const bad = desk ? found.filter((n) => n.price) : found;
           if (bad.length > 0) {
             muted = true;
+            stopped = sentence.trim();
+            for (const n of bad)
+              tags.push({ value: n.value, text: n.text, source: 'stopped', question });
             emit({ content: SAFE_LINE });
             record({
               type: 'blocked',
@@ -352,6 +390,11 @@ export async function catchLies(req: ChatRequest, deps: CatcherDeps): Promise<Re
               unbacked: bad.map((n) => n.value),
             });
             return;
+          }
+          // Tag the numbers that matter: from the book, or only from what the other person said.
+          for (const n of findNumbers(sentence)) {
+            const source = proven.has(n.value) ? 'book' : heardSet.has(n.value) ? 'heard' : null;
+            if (source) tags.push({ value: n.value, text: n.text, source, question });
           }
           emit({ content: sentence });
         };
@@ -421,6 +464,15 @@ export async function catchLies(req: ChatRequest, deps: CatcherDeps): Promise<Re
         }
 
         if (!spoke) emit({ content: '' });
+        record({
+          type: 'turn',
+          callRef,
+          heard: heardNow,
+          said: spoken.join('').trim(),
+          stopped,
+          numbers: tags,
+          thinkMs,
+        });
         controller.enqueue(sse.chunk({}, finish ?? 'stop'));
         controller.enqueue(sse.done());
         controller.close();
@@ -430,4 +482,29 @@ export async function catchLies(req: ChatRequest, deps: CatcherDeps): Promise<Re
       },
     }),
   );
+}
+
+/** Reads a checked reply (the SSE `catchLies` returns) back into its words and tool calls. */
+export async function readCompletion(
+  res: Response,
+): Promise<{ text: string; tools: Array<{ id: string; name: string; arguments: string }> }> {
+  let text = '';
+  const tools: Array<{ id: string; name: string; arguments: string }> = [];
+  for (const line of (await res.text()).split('\n')) {
+    if (!line.startsWith('data: ') || line === 'data: [DONE]') continue;
+    let delta: { content?: unknown; tool_calls?: Array<ToolCallDelta & { id?: string }> } = {};
+    try {
+      delta = JSON.parse(line.slice(6)).choices?.[0]?.delta ?? {};
+    } catch {
+      continue;
+    }
+    if (typeof delta.content === 'string') text += delta.content;
+    for (const t of delta.tool_calls ?? []) {
+      const i = t.index ?? 0;
+      tools[i] ??= { id: t.id ?? `tool_${i}`, name: '', arguments: '' };
+      if (t.function?.name) tools[i].name = t.function.name;
+      tools[i].arguments += t.function?.arguments ?? '';
+    }
+  }
+  return { text: text.trim(), tools: tools.filter(Boolean) };
 }

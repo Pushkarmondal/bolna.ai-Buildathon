@@ -3,7 +3,7 @@
 
 import type { OrderView } from '@bhaav/shared';
 import { useState } from 'react';
-import { useParams } from 'react-router';
+import { useNavigate, useParams } from 'react-router';
 import { OrderUnavailable } from '../App';
 import { api, useApplyOrder, useHistory, useOrder } from '../api';
 import { PriceChart, trendSentence } from '../chart';
@@ -11,6 +11,8 @@ import { type Choice, choiceOf } from '../choice';
 import { callLabel, dateLabel, isLive, quoteTerms, rupees, unitWord } from '../format';
 import {
   ArrowLeft,
+  ArrowsClockwise,
+  CalendarCheck,
   ChartLineUp,
   CheckCircle,
   Copy,
@@ -25,6 +27,8 @@ import {
   ButtonLink,
   Card,
   EmptyState,
+  Field,
+  inputClass,
   Notice,
   PageTitle,
   Pill,
@@ -232,6 +236,7 @@ export function ResultPage() {
           )}
           {view.ranking.length > 0 && <ShareCard view={view} />}
           <MemoryCard view={view} />
+          {!o.isPractice && !o.isSimulation && <NextTimeCard view={view} />}
         </div>
       </div>
     </>
@@ -447,6 +452,159 @@ function MemoryCard({ view }: { view: OrderView }) {
           <p className="mt-2 text-sm text-muted-fg">{trendSentence(points, unit)}</p>
         </>
       )}
+    </Card>
+  );
+}
+
+const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
+/** India-time weekday today, so "every week" starts on the day the buyer is ordering. */
+const todayInIndia = () => new Date(Date.now() + 330 * 60_000).getUTCDay();
+
+/** "The same next time": order again in one tap, or every week by itself. */
+function NextTimeCard({ view }: { view: OrderView }) {
+  const navigate = useNavigate();
+  const applyOrder = useApplyOrder(view.order.id);
+  const schedule = view.schedule;
+  const { from, to } = view.callHours;
+  const [weekday, setWeekday] = useState(schedule?.weekday ?? todayInIndia());
+  const [hour, setHour] = useState(schedule?.hour ?? from);
+  const [callFirst, setCallFirst] = useState(schedule?.callOwnerFirst ?? false);
+  const [busy, setBusy] = useState<'again' | 'weekly' | 'pause' | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  async function orderAgain() {
+    setBusy('again');
+    setError(null);
+    try {
+      const { id } = await api<{ id: string }>(`/api/requests/${view.order.id}/repeat`, {
+        method: 'POST',
+      });
+      navigate(`/r/${id}`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not copy the order.');
+      setBusy(null);
+    }
+  }
+
+  async function everyWeek() {
+    setBusy('weekly');
+    setError(null);
+    try {
+      await applyOrder(
+        await api<OrderView>(`/api/requests/${view.order.id}/schedule`, {
+          json: { weekday, hour, callOwnerFirst: callFirst },
+        }),
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not set it up.');
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function setActive(active: boolean) {
+    if (!schedule) return;
+    setBusy('pause');
+    setError(null);
+    try {
+      await api(`/api/schedules/${schedule.id}/active`, { json: { active } });
+      await applyOrder(await api<OrderView>(`/api/requests/${view.order.id}`));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not change it.');
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  const hours = Array.from({ length: Math.max(0, to - from) }, (_, i) => from + i);
+  return (
+    <Card title="Next time" icon={ArrowsClockwise}>
+      <p className="mb-4 text-muted-fg">
+        The same item, quantity and suppliers, with a new delivery date.
+      </p>
+      <Button
+        variant="secondary"
+        icon={ArrowsClockwise}
+        busy={busy === 'again'}
+        onClick={orderAgain}
+      >
+        Order this again
+      </Button>
+
+      <h3 className="mt-6 mb-3 flex items-center gap-2 font-semibold">
+        <CalendarCheck size={20} className="text-muted-fg" aria-hidden />
+        Every week, by itself
+      </h3>
+      {schedule && (
+        <p className="mb-3 text-[15px]" role="status">
+          {schedule.active
+            ? `Repeats every ${WEEKDAYS[schedule.weekday]} at ${schedule.hour}:00. Next: ${schedule.nextRun ? new Date(schedule.nextRun).toLocaleString('en-IN', { weekday: 'short', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit', timeZone: 'Asia/Kolkata' }) : 'soon'}.`
+            : 'Paused.'}
+        </p>
+      )}
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <Field id="schedule-day" label="Day">
+          <select
+            id="schedule-day"
+            className={inputClass}
+            value={weekday}
+            onChange={(e) => setWeekday(Number(e.target.value))}
+          >
+            {WEEKDAYS.map((d, i) => (
+              <option key={d} value={i}>
+                {d}
+              </option>
+            ))}
+          </select>
+        </Field>
+        <Field id="schedule-hour" label="Start calls at">
+          <select
+            id="schedule-hour"
+            className={inputClass}
+            value={hour}
+            onChange={(e) => setHour(Number(e.target.value))}
+          >
+            {hours.map((h) => (
+              <option key={h} value={h}>
+                {h}:00
+              </option>
+            ))}
+          </select>
+        </Field>
+      </div>
+      <label
+        className="mt-3 flex min-h-11 cursor-pointer items-start gap-3 text-sm"
+        htmlFor="schedule-call-first"
+      >
+        <input
+          id="schedule-call-first"
+          type="checkbox"
+          className="mt-0.5 size-5 shrink-0 accent-[var(--accent)]"
+          checked={callFirst}
+          onChange={(e) => setCallFirst(e.target.checked)}
+        />
+        <span>Phone me first to confirm, instead of starting the calls by itself.</span>
+      </label>
+      {error && (
+        <div className="mt-3">
+          <Notice tone="danger">{error}</Notice>
+        </div>
+      )}
+      <div className="mt-4 flex flex-wrap gap-2">
+        <Button variant="primary" icon={CalendarCheck} busy={busy === 'weekly'} onClick={everyWeek}>
+          {schedule ? 'Save' : 'Repeat every week'}
+        </Button>
+        {schedule && (
+          <Button
+            variant="ghost"
+            busy={busy === 'pause'}
+            onClick={() => setActive(!schedule.active)}
+          >
+            {schedule.active ? 'Pause' : 'Resume'}
+          </Button>
+        )}
+      </div>
     </Card>
   );
 }

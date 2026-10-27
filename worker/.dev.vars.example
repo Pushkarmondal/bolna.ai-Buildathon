@@ -21,6 +21,7 @@ COOKIE_SECRET=
 # BOLNA_BASE_URL=http://localhost:8790
 # BOLNA_DESK_AGENT_ID=fake-desk
 # BOLNA_CALLER_AGENT_ID=fake-caller
+# BOLNA_OWNER_AGENT_ID=fake-owner
 # The fake also stands in for Groq: it answers only the e2e lie test and refuses everything else.
 # GROQ_BASE_URL=http://localhost:8790/groq
 # Local runs against the fake Bolna place many pretend calls; lift the daily cap (real deploys keep wrangler.toml's 60).

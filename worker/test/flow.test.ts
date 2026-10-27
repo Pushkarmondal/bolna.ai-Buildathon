@@ -838,6 +838,7 @@ describe('practice mode', () => {
         buyer_name: 'Ravi',
         today: expect.stringMatching(/^\w+day \d{1,2} \w+ \d{4} \(\d{4}-\d{2}-\d{2}\)$/),
         timezone: 'Asia/Kolkata',
+        order_note: 'nothing yet',
       },
     });
   });

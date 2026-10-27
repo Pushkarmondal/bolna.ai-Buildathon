@@ -13,6 +13,7 @@ const ResultPage = lazy(() => import('./pages/Result').then((m) => ({ default: m
 const PricesPage = lazy(() => import('./pages/Prices').then((m) => ({ default: m.PricesPage })));
 const PlayPage = lazy(() => import('./pages/Play').then((m) => ({ default: m.PlayPage })));
 const BenchPage = lazy(() => import('./pages/Bench').then((m) => ({ default: m.BenchPage })));
+const ProofPage = lazy(() => import('./pages/Proof').then((m) => ({ default: m.ProofPage })));
 
 const router = createBrowserRouter([
   {
@@ -28,6 +29,7 @@ const router = createBrowserRouter([
           { path: '/prices', element: <PricesPage /> },
           { path: '/play', element: <PlayPage /> },
           { path: '/bench', element: <BenchPage /> },
+          { path: '/proof', element: <ProofPage /> },
           { path: '*', element: <NotFound /> },
         ],
       },

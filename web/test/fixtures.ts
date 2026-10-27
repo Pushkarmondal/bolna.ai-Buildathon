@@ -24,6 +24,7 @@ export function call(
     endedAt: null,
     attempt: 1,
     retryable: false,
+    callbackAt: null,
   };
 }
 
@@ -68,6 +69,9 @@ export function finishedOrder(): OrderView {
       status: 'done',
       approvedQuoteId: null,
       isPractice: false,
+      isSimulation: false,
+      buyerPhone: null,
+      ownerUpdates: false,
       createdAt: at(),
     },
     suppliers: [
@@ -119,6 +123,8 @@ export function finishedOrder(): OrderView {
     missing: [],
     waitingFor: null,
     callHours: { from: 10, to: 19 },
+    turns: [],
+    schedule: null,
   };
 }
 

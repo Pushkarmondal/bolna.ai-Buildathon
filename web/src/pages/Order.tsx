@@ -5,7 +5,7 @@ import type { LANGUAGES, OrderView, SupplierDto, Unit } from '@bhaav/shared';
 import { type FormEvent, useEffect, useRef, useState } from 'react';
 import { useParams } from 'react-router';
 import { OrderUnavailable } from '../App';
-import { api, lastOrder, useApplyOrder, useOrder } from '../api';
+import { api, lastOrder, simDriver, useApplyOrder, useOrder } from '../api';
 import {
   callLabel,
   dateLabel,
@@ -19,10 +19,14 @@ import {
 } from '../format';
 import {
   ArrowRight,
+  ChatsCircle,
   ListChecks,
   Microphone,
+  Pause,
   PhoneCall,
   PhoneDisconnect,
+  PhoneIncoming,
+  PlayCircle,
   Receipt,
   ShieldCheck,
   Trash,
@@ -30,6 +34,7 @@ import {
   UsersThree,
   WarningCircle,
 } from '../icons';
+import { Transcript, TranscriptLegend } from '../transcript';
 import {
   Button,
   ButtonLink,
@@ -113,10 +118,20 @@ function DraftOrder({ view, desk }: { view: OrderView; desk: WebCall }) {
       <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-2">
         <div className="flex min-w-0 flex-col gap-4">
           <TalkCard requestId={o.id} call={desk} />
+          {view.turns.some((t) => t.callId === null) && (
+            <Card title="What Bhaav heard" icon={ChatsCircle}>
+              <Transcript
+                turns={view.turns.filter((t) => t.callId === null)}
+                otherName={o.buyerName ?? 'You'}
+                live={desk.active}
+              />
+            </Card>
+          )}
           <OrderCard view={view} />
         </div>
         <div className="flex min-w-0 flex-col gap-4">
           <SuppliersCard view={view} />
+          <OwnerCard view={view} />
           <StartCard view={view} />
         </div>
       </div>
@@ -495,6 +510,105 @@ function SuppliersCard({ view }: { view: OrderView }) {
   );
 }
 
+/**
+ * The owner line: Bhaav can phone the owner to take the order by voice now, and again with the
+ * result when the calls are done, to approve by voice. The number must be on the approved list.
+ */
+function OwnerCard({ view }: { view: OrderView }) {
+  const setView = useSetView(view.order.id);
+  const saved = view.order.buyerPhone;
+  const [phone, setPhone] = useState(saved ? phoneLabel(saved) : '');
+  const [busy, setBusy] = useState<'save' | 'call' | null>(null);
+  const [message, setMessage] = useState<{ tone: 'success' | 'danger'; text: string } | null>(null);
+
+  async function save(patch: { buyerPhone?: string | null; ownerUpdates?: boolean }) {
+    setMessage(null);
+    setBusy('save');
+    try {
+      setView(await api<OrderView>(`/api/requests/${view.order.id}/owner`, { json: patch }));
+      return true;
+    } catch (err) {
+      setMessage({ tone: 'danger', text: err instanceof Error ? err.message : 'Not saved.' });
+      return false;
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function callMe() {
+    setMessage(null);
+    if (!phone.trim()) {
+      setMessage({ tone: 'danger', text: 'Add your mobile number first.' });
+      return;
+    }
+    if (!saved || phoneLabel(saved) !== phone.trim()) {
+      if (!(await save({ buyerPhone: phone }))) return;
+    }
+    setBusy('call');
+    try {
+      const result = await api<{ message: string; view: OrderView }>(
+        `/api/requests/${view.order.id}/call-me`,
+        { method: 'POST' },
+      );
+      setView(result.view);
+      setMessage({ tone: 'success', text: result.message });
+    } catch (err) {
+      setMessage({ tone: 'danger', text: err instanceof Error ? err.message : 'Could not call.' });
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  return (
+    <Card title="Bhaav can call you" icon={PhoneIncoming}>
+      <p className="mb-4 text-muted-fg">
+        No screen needed: Bhaav phones you to take the order, and again with the result so you can
+        approve by voice.
+      </p>
+      <div className="flex flex-col gap-4">
+        <Field id="owner-phone" label="Your phone number" hint="It must be on the approved list.">
+          <input
+            className={`${inputClass} tabular`}
+            type="tel"
+            inputMode="tel"
+            autoComplete="tel"
+            placeholder="e.g. 98765 43210"
+            value={phone}
+            onChange={(e) => setPhone(e.target.value)}
+            onBlur={() => {
+              if (phone.trim() && (!saved || phoneLabel(saved) !== phone.trim()))
+                void save({ buyerPhone: phone });
+            }}
+            {...fieldProps('owner-phone', { hint: true })}
+          />
+        </Field>
+        <label
+          className="flex min-h-11 cursor-pointer items-start gap-3 text-sm"
+          htmlFor="owner-updates"
+        >
+          <input
+            id="owner-updates"
+            type="checkbox"
+            className="mt-0.5 size-5 shrink-0 accent-[var(--accent)]"
+            checked={view.order.ownerUpdates}
+            onChange={(e) =>
+              void save({
+                ownerUpdates: e.target.checked,
+                ...(phone.trim() && !saved ? { buyerPhone: phone } : {}),
+              })
+            }
+          />
+          <span>Call me with the result when the calls are done, so I can approve by voice.</span>
+        </label>
+        {message && <Notice tone={message.tone}>{message.text}</Notice>}
+        <Button variant="secondary" icon={PhoneIncoming} busy={busy === 'call'} onClick={callMe}>
+          Call me to take the order
+        </Button>
+      </div>
+    </Card>
+  );
+}
+
 function StartCard({ view }: { view: OrderView }) {
   const setView = useSetView(view.order.id);
   // An error is shown only while the order is as it was when the error happened; once the
@@ -577,6 +691,15 @@ function waitingSentence(view: OrderView): string | null {
       return 'Bhaav is on a call for another order. The next call here starts as soon as that one ends.';
     case 'retry':
       return 'Bolna was busy, so Bhaav will try that call again in a minute.';
+    case 'callback': {
+      const promised = view.calls
+        .filter((c) => c.callbackAt !== null && c.callbackAt > Date.now())
+        .sort((a, b) => (a.callbackAt ?? 0) - (b.callbackAt ?? 0))[0];
+      const who = view.suppliers.find((s) => s.id === promised?.supplierId)?.name ?? 'A supplier';
+      return promised?.callbackAt
+        ? `${who} asked to be called back, so Bhaav calls again at ${timeLabel(promised.callbackAt)}.`
+        : 'A supplier asked to be called back later.';
+    }
     default:
       return null;
   }
@@ -626,6 +749,8 @@ function LiveCalls({ view, desk }: { view: OrderView; desk: WebCall }) {
           </Button>
         </div>
       )}
+
+      {o.isSimulation && <SimulationBar view={view} />}
 
       {working && !liveCall && waitingSentence(view) && (
         <div className="mb-4">
@@ -693,7 +818,9 @@ function LiveCalls({ view, desk }: { view: OrderView; desk: WebCall }) {
                           {ROUND_NAMES[c.round] ?? `Round ${c.round}`}:{' '}
                           {c.status === 'failed' && c.retryable
                             ? 'Bolna busy, trying again'
-                            : callLabel(c.status)}
+                            : c.callbackAt !== null && c.callbackAt > Date.now()
+                              ? `call back at ${timeLabel(c.callbackAt)}`
+                              : callLabel(c.status)}
                         </Pill>
                       ))}
                       {s.doNotCall && <Pill tone="danger">Asked not to be called</Pill>}
@@ -703,11 +830,174 @@ function LiveCalls({ view, desk }: { view: OrderView; desk: WebCall }) {
               })}
             </ul>
           </Card>
+          <Conversation view={view} supplierName={supplierName} />
           <QuoteBook view={view} supplierName={supplierName} />
         </div>
-        <LieCatcher view={view} />
+        <div className="flex min-w-0 flex-col gap-4">
+          <LieCatcher view={view} />
+          {(o.buyerPhone || view.events.some((e) => e.type === 'owner_call')) && (
+            <OwnerStatus view={view} />
+          )}
+        </div>
       </div>
     </>
+  );
+}
+
+/**
+ * Drives a "Watch a full order" simulation one step at a time, from the tab that started it.
+ * Another tab only watches: two drivers would play the same supplier line twice.
+ */
+function SimulationBar({ view }: { view: OrderView }) {
+  const id = view.order.id;
+  const applyOrder = useApplyOrder(id);
+  // A tab that only watches can take over, if the tab that started it was closed.
+  const [driver, setDriver] = useState(() => simDriver.is(id));
+  const working = view.order.status === 'calling' || view.order.status === 'bargaining';
+  const [paused, setPaused] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!driver || paused || !working || error) return;
+    let cancelled = false;
+    void (async () => {
+      while (!cancelled) {
+        // A short pause between lines, so a person can follow the conversation.
+        await new Promise((resolve) => setTimeout(resolve, 900));
+        if (cancelled) return;
+        try {
+          const result = await api<{ step: string; view: OrderView }>(
+            `/api/simulations/${id}/step`,
+            { method: 'POST' },
+          );
+          if (cancelled) return;
+          await applyOrder(result.view);
+          if (result.step === 'done') return;
+        } catch (e) {
+          if (!cancelled) setError(e instanceof Error ? e.message : 'The simulation stopped.');
+          return;
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [driver, paused, working, error, id, applyOrder]);
+
+  const calls = view.calls.length;
+  return (
+    <div className="surface mb-4 flex flex-wrap items-center gap-3 px-5 py-4">
+      <Pill tone="warn" pulse={working && !paused && driver}>
+        Simulation
+      </Pill>
+      <p className="min-w-0 flex-1 text-[15px] text-muted-fg">
+        Pretend suppliers, the real AI and the real lie-catcher.{' '}
+        {working
+          ? driver
+            ? `${calls} call${calls === 1 ? '' : 's'} so far.`
+            : 'Another tab is running it; this one watches.'
+          : 'Finished.'}
+      </p>
+      {working && driver && (
+        <Button
+          variant="secondary"
+          icon={paused ? PlayCircle : Pause}
+          onClick={() => setPaused((p) => !p)}
+        >
+          {paused ? 'Resume' : 'Pause'}
+        </Button>
+      )}
+      {working && !driver && (
+        <Button
+          variant="secondary"
+          icon={PlayCircle}
+          onClick={() => {
+            simDriver.set(id);
+            setDriver(true);
+          }}
+        >
+          Run it here
+        </Button>
+      )}
+      {error && (
+        <div className="w-full">
+          <Notice tone="danger">
+            {error}{' '}
+            <button
+              type="button"
+              className="min-h-11 font-semibold underline"
+              onClick={() => setError(null)}
+            >
+              Try again
+            </button>
+          </Notice>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** One call's conversation at a time: the live one, or the one picked. */
+function Conversation({
+  view,
+  supplierName,
+}: {
+  view: OrderView;
+  supplierName: (id: string) => string;
+}) {
+  const withTurns = view.calls.filter((c) => view.turns.some((t) => t.callId === c.id));
+  const live = view.calls.find((c) => isLive(c.status) && withTurns.includes(c));
+  const [picked, setPicked] = useState<string | null>(null);
+  const shown = withTurns.find((c) => c.id === picked) ?? live ?? withTurns.at(-1);
+  if (!shown) return null;
+  return (
+    <Card title="Conversation" icon={ChatsCircle}>
+      {withTurns.length > 1 && (
+        <fieldset className="mb-3 flex flex-wrap gap-1.5">
+          <legend className="sr-only">Choose a call</legend>
+          {withTurns.map((c) => (
+            <button
+              key={c.id}
+              type="button"
+              aria-pressed={c.id === shown.id}
+              onClick={() => setPicked(c.id)}
+              className={`min-h-11 rounded-full px-3.5 text-sm font-medium ${c.id === shown.id ? 'bg-fg text-bg' : 'bg-muted text-fg'}`}
+            >
+              {supplierName(c.supplierId)} · {ROUND_NAMES[c.round] ?? `Round ${c.round}`}
+              {c.attempt > 1 ? ` ${c.attempt}` : ''}
+            </button>
+          ))}
+        </fieldset>
+      )}
+      <TranscriptLegend />
+      <Transcript
+        turns={view.turns.filter((t) => t.callId === shown.id)}
+        otherName={supplierName(shown.supplierId)}
+        live={shown.id === live?.id}
+      />
+    </Card>
+  );
+}
+
+/** Whether Bhaav will phone the owner with the result, and when it did. */
+function OwnerStatus({ view }: { view: OrderView }) {
+  const called = view.events.filter((e) => e.type === 'owner_call');
+  return (
+    <Card title="Your phone" icon={PhoneIncoming}>
+      <ul className="flex flex-col gap-1.5 text-[15px] text-muted-fg">
+        {view.order.ownerUpdates && !called.some((e) => e.detail?.kind === 'result') && (
+          <li>Bhaav calls you with the result when the calls are done.</li>
+        )}
+        {called.map((e) => (
+          <li key={e.id}>
+            <span className="tabular">{timeLabel(e.createdAt)}</span>:{' '}
+            {e.detail?.kind === 'result'
+              ? 'Bhaav called you with the result.'
+              : 'Bhaav called you to take the order.'}
+          </li>
+        ))}
+      </ul>
+    </Card>
   );
 }
 

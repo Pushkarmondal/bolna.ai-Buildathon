@@ -1,6 +1,6 @@
-// The five tables of an order, plus wrong passcodes. `quotes` and `events` are append-only:
-// triggers in the migrations refuse UPDATE and DELETE, so the record of what Bhaav heard and said
-// can be trusted.
+// The tables of an order (requests, suppliers, calls, quotes, events, turns), weekly schedules,
+// and wrong passcodes. `quotes`, `events` and `turns` are append-only: triggers in the migrations
+// refuse UPDATE and DELETE, so the record of what Bhaav heard and said can be trusted.
 
 import { CALL_STATUSES, EVENT_TYPES, REQUEST_STATUSES, UNITS } from '@bhaav/shared';
 import { sql } from 'drizzle-orm';
@@ -27,6 +27,12 @@ export const requests = sqliteTable(
     status: text('status', { enum: REQUEST_STATUSES }).notNull().default('draft'),
     approvedQuoteId: text('approved_quote_id'),
     isPractice: integer('is_practice', { mode: 'boolean' }).notNull().default(false),
+    /** A "Watch a full order" run: pretend suppliers, the real AI and lie-catcher. */
+    isSimulation: integer('is_simulation', { mode: 'boolean' }).notNull().default(false),
+    /** The owner's own number (E.164), for Bhaav to call them; must be on the approved list. */
+    buyerPhone: text('buyer_phone'),
+    /** Call the owner with the result when the calls are done, to approve by voice. */
+    ownerUpdates: integer('owner_updates', { mode: 'boolean' }).notNull().default(false),
     createdAt: createdAt(),
   },
   // Price memory finds earlier orders of the same item by this key, without reading every quote.
@@ -63,7 +69,8 @@ export const calls = sqliteTable(
       .notNull()
       .references(() => suppliers.id),
     round: integer('round').notNull(),
-    channel: text('channel', { enum: ['phone', 'web'] })
+    /** phone: a real supplier call; web: a judge's practice call; sim: a "Watch a full order" call. */
+    channel: text('channel', { enum: ['phone', 'web', 'sim'] })
       .notNull()
       .default('phone'),
     bolnaExecutionId: text('bolna_execution_id'),
@@ -78,6 +85,8 @@ export const calls = sqliteTable(
     attempt: integer('attempt').notNull().default(1),
     /** Set when Bolna refused to place the call for a passing reason (busy, at its call limit). */
     retryable: integer('retryable', { mode: 'boolean' }).notNull().default(false),
+    /** The supplier asked to be called back: when Bhaav promised to. */
+    callbackAt: integer('callback_at', { mode: 'timestamp_ms' }),
     createdAt: createdAt(),
   },
   (t) => [
@@ -138,6 +147,55 @@ export const events = sqliteTable(
   (t) => [index('events_request_idx').on(t.requestId), index('events_call_idx').on(t.callId)],
 );
 
+/**
+ * Every turn of a call as the lie-catcher saw it: what the other person said, what Bhaav said,
+ * each number and where it came from, and any sentence it stopped. The live transcript.
+ */
+export const turns = sqliteTable(
+  'turns',
+  {
+    id: id(),
+    requestId: text('request_id').references(() => requests.id),
+    callId: text('call_id').references(() => calls.id),
+    /** The other person's latest words; null when the turn followed a tool's result. */
+    heard: text('heard'),
+    /** What Bolna was given to speak, after the checks. */
+    said: text('said').notNull(),
+    /** The sentence the lie-catcher stopped, if any. */
+    stopped: text('stopped'),
+    numbers: text('numbers', { mode: 'json' })
+      .$type<Array<{ value: number; text: string; source: string; question: boolean }>>()
+      .notNull(),
+    /** Server time from the request to the first words, in ms. */
+    thinkMs: integer('think_ms'),
+    createdAt: createdAt(),
+  },
+  (t) => [index('turns_call_idx').on(t.callId), index('turns_request_idx').on(t.requestId)],
+);
+
+/** "Every Monday at 10": an order repeated each week from a past one. */
+export const schedules = sqliteTable(
+  'schedules',
+  {
+    id: id(),
+    /** The order each week's order copies. */
+    requestId: text('request_id')
+      .notNull()
+      .references(() => requests.id),
+    /** 0 is Sunday, as JavaScript counts, in India time. */
+    weekday: integer('weekday').notNull(),
+    /** India-time hour the week's order starts. */
+    hour: integer('hour').notNull(),
+    /** Phone the owner to confirm first, instead of starting the calls by itself. */
+    callOwnerFirst: integer('call_owner_first', { mode: 'boolean' }).notNull().default(false),
+    active: integer('active', { mode: 'boolean' }).notNull().default(true),
+    /** YYYY-MM-DD of the last week's order, so a day never runs twice. */
+    lastRunOn: text('last_run_on'),
+    createdAt: createdAt(),
+  },
+  (t) => [uniqueIndex('schedules_one_per_order').on(t.requestId)],
+);
+
 /** Wrong passcodes, so guessing can be slowed down. Holds a hash of the address, never the address. */
 export const loginAttempts = sqliteTable(
   'login_attempts',
@@ -154,3 +212,5 @@ export type SupplierRow = typeof suppliers.$inferSelect;
 export type CallRow = typeof calls.$inferSelect;
 export type QuoteRow = typeof quotes.$inferSelect;
 export type EventRow = typeof events.$inferSelect;
+export type TurnRow = typeof turns.$inferSelect;
+export type ScheduleRow = typeof schedules.$inferSelect;

@@ -58,6 +58,8 @@ export interface DiallerEnv {
   maxLiveCalls: number;
   /** India-time hours when suppliers may be called: from 10 to 19 is 10:00 to 18:59. */
   callHours: { from: number; to: number };
+  /** The Caller can connect a supplier to the owner (BOLNA_HANDOFF="on"). */
+  handoff?: boolean;
   /** The clock, so tests can be any time of day. */
   now?: () => number;
 }
@@ -90,6 +92,15 @@ export function inCallHours(hours: { from: number; to: number }, now = Date.now(
   return hour >= hours.from && hour < hours.to;
 }
 
+/** `at`, or the next time calling hours open after it (India time). */
+export function nextCallingTime(hours: { from: number; to: number }, at: number): number {
+  if (inCallHours(hours, at)) return at;
+  const ist = new Date(at + 330 * 60_000);
+  const openToday =
+    Date.UTC(ist.getUTCFullYear(), ist.getUTCMonth(), ist.getUTCDate(), hours.from) - 330 * 60_000;
+  return openToday > at ? openToday : openToday + 86_400_000;
+}
+
 export function diallerEnv(env: Cloudflare.Env): DiallerEnv {
   const cap = Number(env.MAX_CALLS_PER_DAY);
   const live = Number(env.MAX_LIVE_CALLS);
@@ -101,6 +112,8 @@ export function diallerEnv(env: Cloudflare.Env): DiallerEnv {
     maxCallsPerDay: Number.isFinite(cap) && cap >= 0 ? cap : 60,
     maxLiveCalls: Number.isInteger(live) && live >= 1 ? live : 1,
     callHours: parseCallHours(env.CALL_HOURS),
+    // A string var: wrangler types it as its literal default, so compare it as a string.
+    handoff: String(env.BOLNA_HANDOFF) === 'on',
   };
 }
 
@@ -143,12 +156,14 @@ export function isPassingRefusal(error: unknown): boolean {
 type RoundState =
   | { kind: 'new' }
   | { kind: 'done' }
-  | { kind: 'retry'; attempt: number }
-  | { kind: 'wait' };
+  | { kind: 'retry'; attempt: number; callback?: boolean }
+  | { kind: 'wait' }
+  | { kind: 'later'; at: number };
 
 /**
  * Where a supplier stands in a round: not called yet, done with (called, or given up on after
- * three passing refusals), due another try, or waiting out the minute after a passing refusal.
+ * three passing refusals), due another try, waiting out the minute after a passing refusal, or
+ * asked to be called back later (once per round; the callback is the next try).
  */
 export function roundState(
   callRows: readonly CallRow[],
@@ -158,23 +173,36 @@ export function roundState(
 ): RoundState {
   const own = callRows.filter((c) => c.supplierId === supplierId && c.round === round);
   if (own.length === 0) return { kind: 'new' };
+  const latest = own.reduce((a, b) => (b.attempt > a.attempt ? b : a));
+  const promised = latest.callbackAt?.getTime();
+  if (promised !== undefined && isFinal(latest.status) && own.length < MAX_ATTEMPTS) {
+    return now < promised
+      ? { kind: 'later', at: promised }
+      : { kind: 'retry', attempt: latest.attempt + 1, callback: true };
+  }
   if (own.some((c) => !(c.status === 'failed' && c.retryable))) return { kind: 'done' };
   if (own.length >= MAX_ATTEMPTS) return { kind: 'done' };
   const last = Math.max(...own.map((c) => c.createdAt.getTime()));
   return now - last < RETRY_AFTER_MS
     ? { kind: 'wait' }
-    : { kind: 'retry', attempt: own.length + 1 };
+    : { kind: 'retry', attempt: latest.attempt + 1 };
 }
 
 const attemptOf = (state: RoundState) => (state.kind === 'retry' ? state.attempt : 1);
 
-/** The variables the Caller's prompt is filled with (Bolna substitutes them from user_data). */
+/**
+ * The variables the Caller's prompt is filled with (Bolna substitutes them from user_data).
+ * `callback`: this call keeps a promise to call back; `handoff`: the Caller can connect the
+ * supplier to the owner (its Bolna agent has the transfer tool, BOLNA_HANDOFF="on").
+ */
 export function callerUserData(
   request: RequestRow,
   supplier: SupplierRow,
   call: { id: string; round: number },
   bestOfferText: string | null,
+  { callback = false, handoff = false }: { callback?: boolean; handoff?: boolean } = {},
 ): Record<string, string> {
+  const buyer = request.buyerName || 'our customer';
   return {
     call_ref: call.id,
     buyer_name: request.buyerName || 'our customer',
@@ -189,6 +217,12 @@ export function callerUserData(
     language: LANGUAGE_NAMES[supplier.language] ?? 'Hindi',
     // Starts a multilingual Bolna agent in the supplier's language.
     agent_language: supplier.language in LANGUAGE_NAMES ? supplier.language : 'hi',
+    callback_note: callback
+      ? 'They asked you to call back at this time. Say so first: "आपने इस समय call करने को कहा था।"'
+      : 'none',
+    handoff_rule: handoff
+      ? `If they insist on speaking to ${buyer} in person, say "एक second जी, मैं उन्हें जोड़ता हूँ।" and call transfer_to_owner.`
+      : `If they insist on speaking to the owner, say ${buyer} will call them back.`,
   };
 }
 
@@ -214,6 +248,7 @@ async function dial(
   round: number,
   bestOfferText: string | null,
   attempt: number,
+  callback = false,
 ): Promise<'dialled' | 'raced' | 'busy' | 'failed'> {
   const call = { id: newId('call'), round };
   try {
@@ -236,7 +271,10 @@ async function dial(
       agentId: env.callerAgentId,
       phone: supplier.phone,
       fromNumber: env.fromNumber,
-      userData: callerUserData(request, supplier, call, bestOfferText),
+      userData: callerUserData(request, supplier, call, bestOfferText, {
+        callback,
+        handoff: env.handoff,
+      }),
     });
     await db
       .update(calls)
@@ -262,29 +300,45 @@ async function dial(
 
 export type Step = 'not-calling' | 'waiting' | 'dialled' | 'done';
 
-type Next =
-  | { supplier: SupplierRow; round: number; attempt: number; bestOfferText: string | null }
+export type Next =
+  | {
+      supplier: SupplierRow;
+      round: number;
+      attempt: number;
+      bestOfferText: string | null;
+      /** Calling back at the time the supplier asked for. */
+      callback: boolean;
+    }
   | 'wait'
   | 'none';
 
 /**
  * The first supplier due a call in this round, in list order. A supplier waiting out a busy
- * Bolna holds the round ('wait'): Bolna's being busy is no reason to skip to someone else.
+ * Bolna holds the round ('wait'): Bolna's being busy is no reason to skip to someone else. A
+ * supplier who asked to be called back later is passed over until then, but keeps the round open.
  */
-function nextIn(
+export function nextIn(
   candidates: readonly SupplierRow[],
   callRows: readonly CallRow[],
   round: number,
   now: number,
   bestOfferText: string | null,
 ): Next {
+  let later = false;
   for (const supplier of candidates) {
     const state = roundState(callRows, supplier.id, round, now);
     if (state.kind === 'new' || state.kind === 'retry')
-      return { supplier, round, attempt: attemptOf(state), bestOfferText };
+      return {
+        supplier,
+        round,
+        attempt: attemptOf(state),
+        bestOfferText,
+        callback: state.kind === 'retry' && state.callback === true,
+      };
     if (state.kind === 'wait') return 'wait';
+    if (state.kind === 'later') later = true;
   }
-  return 'none';
+  return later ? 'wait' : 'none';
 }
 
 /** Takes the one next step for an order. Safe to run any number of times, from anywhere. */
@@ -298,6 +352,8 @@ export async function advance(
   const request = await db.select().from(requests).where(eq(requests.id, requestId)).get();
   if (!request || (request.status !== 'calling' && request.status !== 'bargaining'))
     return 'not-calling';
+  // Practice and simulated orders have no phones to dial: they are driven elsewhere.
+  if (request.isPractice || request.isSimulation) return 'not-calling';
   const order = orderOf(request);
   if (!order) return 'not-calling';
 
@@ -313,7 +369,7 @@ export async function advance(
   if (callRows.some((c) => LIVE.includes(c.status))) return 'waiting';
 
   const callable = supplierRows
-    .filter((s) => !s.doNotCall && s.phone !== 'web' && mayCall(env.allowlist, s.phone))
+    .filter((s) => !s.doNotCall && s.phone.startsWith('+') && mayCall(env.allowlist, s.phone))
     .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
 
   let next: Next;
@@ -370,6 +426,7 @@ export async function advance(
     next.round,
     next.bestOfferText,
     next.attempt,
+    next.callback,
   );
   // A refusal about this number moves on to the next supplier; a busy Bolna is waited out.
   if (outcome === 'failed' && depth < 20) return advance(env, db, requestId, depth + 1);
@@ -415,7 +472,7 @@ export async function confirmChoice(
     ? await db.select().from(suppliers).where(eq(suppliers.id, quote.supplierId)).get()
     : undefined;
   if (!quote || !supplier) return { ok: false, message: 'The approved quote is missing.' };
-  if (supplier.phone === 'web')
+  if (!supplier.phone.startsWith('+'))
     return { ok: false, message: 'Practice suppliers cannot be called.' };
   if (supplier.doNotCall)
     return { ok: false, message: `${supplier.name} asked not to be called again.` };
@@ -596,16 +653,25 @@ export async function giveUpOnStuckCalls(
 export async function waitingReason(
   env: DiallerEnv,
   db: Db,
-  request: Pick<RequestRow, 'status'>,
-  callRows: readonly Pick<CallRow, 'channel' | 'status' | 'retryable'>[],
-): Promise<'hours' | 'another_call' | 'retry' | null> {
+  request: Pick<RequestRow, 'status' | 'isPractice' | 'isSimulation'>,
+  callRows: readonly {
+    channel: string;
+    status: CallStatus;
+    retryable: boolean;
+    callbackAt?: Date | number | null;
+  }[],
+): Promise<'hours' | 'another_call' | 'retry' | 'callback' | null> {
   if (request.status !== 'calling' && request.status !== 'bargaining') return null;
+  if (request.isPractice || request.isSimulation) return null;
+  const now = env.now?.() ?? Date.now();
   const phone = callRows.filter((c) => c.channel === 'phone');
   if (phone.some((c) => LIVE.includes(c.status))) return null;
   // Rows are oldest first: a busy Bolna on the latest try means a retry is coming.
   const latest = phone.at(-1);
   if (latest?.status === 'failed' && latest.retryable) return 'retry';
-  if (!inCallHours(env.callHours, env.now?.() ?? Date.now())) return 'hours';
+  // A supplier asked to be called back and nobody else is due yet: the promise is what waits.
+  if (phone.some((c) => c.callbackAt != null && Number(c.callbackAt) > now)) return 'callback';
+  if (!inCallHours(env.callHours, now)) return 'hours';
   if ((await liveCallCount(db)) >= env.maxLiveCalls) return 'another_call';
   return null;
 }
@@ -615,7 +681,13 @@ export async function stalledRequests(db: Db): Promise<string[]> {
   const active = await db
     .select()
     .from(requests)
-    .where(inArray(requests.status, ['calling', 'bargaining']))
+    .where(
+      and(
+        inArray(requests.status, ['calling', 'bargaining']),
+        eq(requests.isPractice, false),
+        eq(requests.isSimulation, false),
+      ),
+    )
     .all();
   const stalled: string[] = [];
   for (const r of active) {

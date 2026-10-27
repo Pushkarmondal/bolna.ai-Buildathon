@@ -14,17 +14,17 @@ Recommended (194): Bhaav phones your suppliers in Hindi, Kannada or English, get
 ## For judges (put this on the first slide and in the form)
 
 1. Open the link and enter the passcode.
-2. Go to **Be the supplier**, pick a supplier, and press **Take Bhaav's call** (allow the microphone).
-3. Bargain, and try to make Bhaav say a price it hasn't heard. Watch the lie-catcher afterwards.
-4. **Test bench** shows 50 simulated chats and how many numbers were stopped.
+2. Press **Watch a full order**: four pretend suppliers, the real AI and lie-catcher, about two minutes. Watch the conversation fill in, a callback being kept, and a planted price stopped in red.
+3. Go to **Be the supplier**, pick a supplier, and press **Take Bhaav's call** (allow the microphone). Try to make Bhaav say a price it hasn't heard. Your try lands on the **Break Bhaav** scoreboard.
+4. **Proof** shows what Bhaav did, from the database: rupees saved on real orders, every number checked, possible slips, answer time, and the test bench.
 5. **Price memory** shows the best price on every past order; each result also says how today compares with last time.
 
 ## Deck (8 slides)
 
 1. The problem: a restaurant owner phoning five suppliers every Monday.
 2. Bhaav in one line, with a screenshot of the results page.
-3. How it works: tell, confirm, ask, bargain, report, approve, and (optionally) Bhaav tells the chosen supplier; the results go to WhatsApp in one tap.
-4. The lie-catcher: a blocked sentence, before and after.
+3. How it works: tell, confirm, ask, bargain, report, approve, and (optionally) Bhaav tells the chosen supplier; the results go to WhatsApp in one tap. The owner line: Bhaav phones the owner to take the order and again for a spoken "haan", with no app needed.
+4. The lie-catcher: the live conversation with numbers marked green, blue and red, and the Break Bhaav scoreboard.
 5. Proof: real calls, rupees saved, 0 unbacked numbers in the bench, read-back accuracy.
 6. Built on Bolna: custom LLM, custom functions, prompt variables, webhooks, Web Call SDK, outbound calls, multilingual (Hindi, Kannada, English), and the Caller as a graph agent.
 7. Market: 8.84 crore Udyam-registered businesses; a monthly plan per shop (a guess to test).

@@ -4,7 +4,7 @@ import { allowedSet, findNumbers, numbersIn, parseAmount, unbackedNumbers } from
 describe('findNumbers: digits', () => {
   it('reads a rupee price and marks it as a price', () => {
     expect(findNumbers('Mere paas ₹32 per kilo ka offer hai')).toEqual([
-      { value: 32, text: '32', price: true },
+      { value: 32, text: '32', price: true, time: false },
     ]);
   });
 
@@ -46,7 +46,7 @@ describe('findNumbers: digits', () => {
 describe('findNumbers: Hindi words', () => {
   it('reads romanised Hindi prices', () => {
     expect(findNumbers('battees rupaye kilo')).toEqual([
-      { value: 32, text: 'battees', price: true },
+      { value: 32, text: 'battees', price: true, time: false },
     ]);
     expect(numbersIn('chhiyaalis rupaye')).toEqual([46]);
   });
@@ -133,7 +133,9 @@ describe('findNumbers: Kannada', () => {
   });
 
   it('reads joined Kannada numbers in script and romanised', () => {
-    expect(findNumbers('ಮೂವತ್ತೆರಡು ರೂಪಾಯಿ')).toEqual([{ value: 32, text: 'ಮೂವತ್ತೆರಡು', price: true }]);
+    expect(findNumbers('ಮೂವತ್ತೆರಡು ರೂಪಾಯಿ')).toEqual([
+      { value: 32, text: 'ಮೂವತ್ತೆರಡು', price: true, time: false },
+    ]);
     expect(numbersIn('ಇಪ್ಪತ್ತಮೂರು')).toEqual([23]);
     expect(numbersIn('ತೊಂಬತ್ತೊಂಬತ್ತು')).toEqual([99]);
     expect(numbersIn('moovatteradu rupayi')).toEqual([32]);
@@ -189,5 +191,19 @@ describe('parseAmount', () => {
     expect(parseAmount('')).toBeUndefined();
     expect(parseAmount(null)).toBeUndefined();
     expect(parseAmount(Number.NaN)).toBeUndefined();
+  });
+});
+
+describe('times are not prices', () => {
+  it('lets Bhaav say when it will call back, but never a price dressed as a time', () => {
+    const allowed = allowedSet([]);
+    expect(unbackedNumbers('ठीक है जी, 45 मिनट बाद call करता हूँ।', allowed)).toEqual([]);
+    expect(unbackedNumbers('Theek hai ji, 45 minute baad call karta hoon.', allowed)).toEqual([]);
+    expect(unbackedNumbers('Main 4 baje call karunga.', allowed)).toEqual([]);
+    expect(unbackedNumbers('Ek ghante baad baat karte hain.', allowed)).toEqual([]);
+    expect(unbackedNumbers('₹45 minute mein bata dunga.', allowed).map((n) => n.value)).toEqual([
+      45,
+    ]);
+    expect(unbackedNumbers('45 rupaye kilo.', allowed).map((n) => n.value)).toEqual([45]);
   });
 });

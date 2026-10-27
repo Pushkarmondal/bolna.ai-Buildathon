@@ -14,10 +14,12 @@ import {
   inCallHours,
   isPassingRefusal,
   liveCallCount,
+  nextCallingTime,
   parseAllowlist,
   parseCallHours,
 } from '../src/dialler';
 import { newId } from '../src/ids';
+import { callBackLater } from '../src/tools';
 
 const db = drizzle(env.DB);
 afterEach(() => vi.restoreAllMocks());
@@ -247,5 +249,72 @@ describe('when Bolna refuses a call', () => {
     expect(dialled).toEqual([refused, '+919888888884']);
     const [failed] = (await callsOf(id)).filter((c) => c.status === 'failed');
     expect(failed?.retryable).toBe(false);
+  });
+});
+
+describe('call me back later', () => {
+  it('moves a callback into calling hours', () => {
+    const hours = { from: 10, to: 19 };
+    expect(nextCallingTime(hours, indiaTime(15))).toBe(indiaTime(15));
+    expect(nextCallingTime(hours, indiaTime(20))).toBe(indiaTime(10) + 86_400_000);
+    expect(nextCallingTime(hours, indiaTime(7))).toBe(indiaTime(10));
+  });
+
+  it('calls the others meanwhile, keeps the round open, and calls back when it promised', async () => {
+    const dialled = fakeBolna();
+    const busy = '+919899999991';
+    const id = await orderWith([busy, '+919899999992']);
+    const t0 = Date.now();
+    const at = (minutes: number) => dialler({ now: () => t0 + minutes * 60_000 });
+
+    expect(await advance(at(0), db, id)).toBe('dialled');
+    const [first] = await callsOf(id);
+    // The supplier asks for an hour; the call ends.
+    const promised = await callBackLater(
+      db,
+      { call_ref: first?.id ?? '', minutes: '60' },
+      { from: 0, to: 24 },
+      t0,
+    );
+    expect(promised.ok).toBe(true);
+    await db
+      .update(calls)
+      .set({ status: 'completed' })
+      .where(eq(calls.id, first?.id ?? ''));
+
+    // The next supplier is called meanwhile.
+    expect(await advance(at(1), db, id)).toBe('dialled');
+    expect(dialled).toEqual([busy, '+919899999992']);
+    await db.update(calls).set({ status: 'completed' }).where(eq(calls.requestId, id));
+
+    // Round 1 stays open for the promise: no bargaining yet, nobody dialled.
+    expect(await advance(at(30), db, id)).toBe('waiting');
+    const [still] = await db.select().from(requests).where(eq(requests.id, id)).all();
+    expect(still?.status).toBe('calling');
+
+    // An hour later, the supplier is called back, and the Caller is told why.
+    const bodies: Array<{ user_data: Record<string, string> }> = [];
+    vi.mocked(globalThis.fetch).mockImplementation(async (_input, init) => {
+      bodies.push(JSON.parse(String(init?.body)));
+      return Response.json({ status: 'queued', execution_id: newId('call') });
+    });
+    expect(await advance(at(61), db, id)).toBe('dialled');
+    expect(bodies[0]?.user_data.callback_note).toMatch(/call back at this time/);
+    const tries = (await callsOf(id)).filter((c) => c.supplierId === first?.supplierId);
+    expect(tries.map((c) => c.attempt)).toEqual([1, 2]);
+  });
+
+  it('promises a callback only once per supplier per round', async () => {
+    fakeBolna();
+    const id = await orderWith(['+919899999993']);
+    await advance(dialler(), db, id);
+    const [call] = await callsOf(id);
+    const hours = { from: 0, to: 24 };
+    expect((await callBackLater(db, { call_ref: call?.id ?? '', minutes: 30 }, hours)).ok).toBe(
+      true,
+    );
+    const again = await callBackLater(db, { call_ref: call?.id ?? '', minutes: 30 }, hours);
+    expect(again.ok).toBe(false);
+    expect(again.message).toMatch(/already promised/);
   });
 });

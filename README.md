@@ -13,7 +13,13 @@ Built for the Bolna Buildathon (October 2026).
 5. **Confirmation call (optional):** Bhaav phones the chosen supplier to say the buyer accepted their quote and will call to arrange payment. If the supplier changes the price on that call, the new terms are recorded and the results page warns the buyer.
 6. **WhatsApp summary:** the ranked quotes as plain text, to copy or open straight in WhatsApp.
 7. **Price memory:** every order's best delivered price per item, with a chart once there are four orders, and "last time" on each new result.
-8. **Be the supplier:** a judge takes the Caller's call in the browser and tries to make it say a price it can't prove.
+8. **Be the supplier:** a judge takes the Caller's call in the browser and tries to make it say a price it can't prove. **Break Bhaav** keeps score of every judge's tries: lies stopped, possible slips (counted, never hidden), and a Hall of Tricks.
+9. **Live conversation:** every turn of every call appears on screen as it happens. Each number Bhaav says is marked green (from the quote book), blue (the supplier's own number read back) or amber (a possible slip); a stopped sentence shows struck through in red.
+10. **Watch a full order:** one tap plays a complete order in about two minutes, for judges who can't take real calls. Four pretend suppliers follow scripts: one asks to be called back, one plants a lower price. Bhaav answers them with the real AI, lie-catcher, quote book and round-2 rules. It is labelled simulation everywhere, never dials, and never counts as a real order.
+11. **Call me back later:** when a supplier says "ghante baad call karna", Bhaav promises a time (within calling hours), calls the others meanwhile, and keeps the promise.
+12. **The owner line:** Bhaav phones the owner, not just the suppliers. It calls to take the order by voice ("Call me"), and again with the result once the calls are done; the owner's spoken, read-back "haan" approves it, and Bhaav can tell the supplier. If a supplier insists on the owner mid-call, Bhaav can connect them (Bolna's transfer tool).
+13. **Order again, every week:** "the same as last time" in one tap, or "every Monday at 10" by itself, either starting the calls or phoning the owner to confirm first.
+14. **Proof:** a page of numbers read straight from the database: rupees saved on real orders, quotes captured, prices found in the supplier's own words, every number the lie-catcher checked, and Bhaav's answer time.
 
 Each supplier is called in their own language: Hindi (written in Devanagari so the voice reads it right), Kannada (in Kannada script) or English, and Bhaav switches if they do.
 
@@ -52,21 +58,29 @@ worker/src/engine.ts        landed price, best offer, round-2 list
 worker/src/dialler.ts       one call at a time across orders, in calling hours: round 1 asks, round 2 bargains,
                             round 3 confirms; retries when Bolna is busy; limits; webhooks
 worker/src/prices.ts        price memory: each past order's best price per item
-worker/src/tools.ts         Bolna custom functions: update_order, start_calls, save_quote, do_not_call
+worker/src/tools.ts         Bolna custom functions: update_order, start_calls, save_quote, do_not_call,
+                            call_back_later
+worker/src/simulate.ts      "Watch a full order": scripted suppliers, the real AI and lie-catcher, step by step
+worker/src/owner.ts         the owner line: Bhaav phones the owner to order, and with the result to approve
+worker/src/schedule.ts      order again, and weekly orders run by the cron
+worker/src/proof.ts         the proof page and the Break Bhaav scoreboard
 worker/src/practice.ts      "Be the supplier" personas and practice orders
-worker/src/prompts.ts       the Desk and Caller prompts
-worker/src/agents.ts        the Bolna agent configs: Desk, Caller, practice Caller (2 minutes), Caller as a graph agent
+worker/src/prompts.ts       the Desk, Caller and owner-line prompts
+worker/src/agents.ts        the Bolna agent configs: Desk, Caller, practice Caller (2 minutes), owner line,
+                            Caller as a graph agent; the transfer tool when there is an owner number
 worker/src/db/              Drizzle schema and the lie-catcher's database reads
 worker/migrations/          SQL migrations (quotes and events are append-only)
-web/src/                    React app: Home, Order (talk / live calls), Results, Price memory, Be the supplier, Test bench
+web/src/                    React app: Home, Order (talk / live calls), Results, Price memory, Be the supplier,
+                            Proof, Test bench
+web/src/transcript.tsx      the live conversation, with every number marked by where it came from
 web/src/choice.ts           what became of the buyer's choice after the confirmation call
 web/src/summary.ts          the WhatsApp text
 web/src/chart.tsx           the price chart (SVG, no chart library)
 web/test/                   unit tests for the web app's logic
 e2e/                        Playwright tests: every journey, every link, the fit check and contrast, against the fake Bolna
 design-system/bhaav/        the design system (colours, type, rules) and where the code departs from it
-scripts/setup-agents.ts     registers the custom LLM and creates both Bolna agents
-scripts/fake-bolna.ts       a stand-in for Bolna's API, for running everything locally
+scripts/setup-agents.ts     registers the custom LLM and creates the Bolna agents
+scripts/fake-bolna.ts       a stand-in for Bolna's API (and a scripted Bhaav for simulations), for local runs
 bench/run.ts                the test bench: simulated chats through the real lie-catcher, audited separately
 .github/workflows/ci.yml    lint, typecheck, tests, build and the scripted bench on every push
 ```
@@ -96,10 +110,10 @@ For frontend work with hot reload, also run `npm run dev:web` and open http://lo
 ## Checks
 
 ```bash
-npm test            # 148 Worker tests (Workers runtime, local D1, faked Bolna) + 30 web tests
+npm test            # 173 Worker tests (Workers runtime, local D1, faked Bolna) + 30 web tests
 npm run typecheck   # every package, plus scripts, bench and e2e
 npm run lint
-npm run e2e         # builds, then runs 33 Playwright tests in your installed Chrome: journeys, links, fit at 9 widths, contrast
+npm run e2e         # builds, then runs 39 Playwright tests in your installed Chrome: journeys, the simulation, the owner line, links, fit at 9 widths, contrast
 npm run bench -- --dry   # the bench harness, scripted, no network
 ```
 
@@ -121,11 +135,11 @@ npm run bench -- --dry   # the bench harness, scripted, no network
 4. **Deploy** (from the repo root): `npm run build && npm run deploy -w worker`. Note the `https://bhaav.<you>.workers.dev` URL.
 5. **Create the Bolna agents:**
    ```bash
-   WORKER_URL=https://bhaav.<you>.workers.dev BOLNA_API_KEY=… LLM_SECRET=… TOOL_SECRET=… WEBHOOK_SECRET=… npm run agents:setup
+   WORKER_URL=https://bhaav.<you>.workers.dev BOLNA_API_KEY=… LLM_SECRET=… TOOL_SECRET=… WEBHOOK_SECRET=… OWNER_PHONE=+91… npm run agents:setup
    ```
-   Put the three printed ids in `worker/wrangler.toml` (`BOLNA_DESK_AGENT_ID`, `BOLNA_CALLER_AGENT_ID`, `BOLNA_PRACTICE_AGENT_ID`). Add `--graph` to create the Caller as a Bolna graph agent (greet, ask, read back, bargain, confirm, close) instead of a single prompt. If Bolna refuses the API body, `npm run agents:print` writes `bolna/*-agent.json` and `bolna/*-tools.json` to paste into the dashboard instead.
-6. **Set the limits** in `worker/wrangler.toml`. `SUPPLIER_ALLOWLIST` lists the numbers of suppliers who agreed; until it is set, no supplier can be added. Check `MAX_CALLS_PER_DAY` and `CALL_HOURS`. Then deploy again.
-7. **Test** in this order: a test call from each agent in Bolna's dashboard; Talk in the app; Be the supplier; then one real supplier who agreed.
+   Put the four printed ids in `worker/wrangler.toml` (`BOLNA_DESK_AGENT_ID`, `BOLNA_CALLER_AGENT_ID`, `BOLNA_PRACTICE_AGENT_ID`, `BOLNA_OWNER_AGENT_ID`). With `OWNER_PHONE`, the Caller gets Bolna's transfer tool, so a supplier who insists on the owner is connected to that number; then set `BOLNA_HANDOFF = "on"`. Bolna fixes the transfer number in the tool, so it is one owner per deployment. Add `--graph` to create the Caller as a Bolna graph agent (greet, ask, read back, bargain, confirm, close) instead of a single prompt. If Bolna refuses the API body, `npm run agents:print` writes `bolna/*-agent.json` and `bolna/*-tools.json` to paste into the dashboard instead.
+6. **Set the limits** in `worker/wrangler.toml`. `SUPPLIER_ALLOWLIST` lists the numbers of suppliers who agreed, plus your own for the owner line; until it is set, no supplier can be added. Check `MAX_CALLS_PER_DAY` and `CALL_HOURS`. Then deploy again.
+7. **Test** in this order: a test call from each agent in Bolna's dashboard; Watch a full order (needs only Groq); Talk in the app; Be the supplier; "Call me" on an order; then one real supplier who agreed.
 8. **Bench:** `GROQ_API_KEY=… npm run bench`, then `npm run build && npm run deploy -w worker` to publish the results on `/bench`. Fifty chats use more than one day of Groq's free allowance, so run them over two days, or with `BENCH_RUNS=25`.
 
 ## Settings
@@ -140,7 +154,8 @@ npm run bench -- --dry   # the bench harness, scripted, no network
 | `APP_PASSCODE` | secret | Opens the app |
 | `COOKIE_SECRET` | secret | Signs the session cookie |
 | `GROQ_MODELS` | var | Models to try, in order |
-| `BOLNA_DESK_AGENT_ID`, `BOLNA_CALLER_AGENT_ID`, `BOLNA_PRACTICE_AGENT_ID` | var | From `npm run agents:setup`; without a practice agent, practice calls use the Caller and only the browser stops them at 2 minutes |
+| `BOLNA_DESK_AGENT_ID`, `BOLNA_CALLER_AGENT_ID`, `BOLNA_PRACTICE_AGENT_ID`, `BOLNA_OWNER_AGENT_ID` | var | From `npm run agents:setup`; without a practice agent, practice calls use the Caller and only the browser stops them at 2 minutes; without an owner agent, the owner line's result call is off |
+| `BOLNA_HANDOFF` | var | `on` once the Caller has the transfer tool (`OWNER_PHONE` at setup) |
 | `BOLNA_FROM_NUMBER` | var | Optional caller number bought in Bolna |
 | `SUPPLIER_ALLOWLIST` | var | Comma-separated numbers Bhaav may call; empty allows none; `*` allows any (local fakes only) |
 | `MAX_CALLS_PER_DAY` | var | Phone calls allowed in any 24 hours (default 60) |
@@ -167,4 +182,8 @@ An Apple-style look, chosen with the [ui-ux-pro-max](https://github.com/nextleve
 - Browser calls (Desk and practice together) are capped at 30 an hour. Practice calls are labelled practice and run on an agent that Bolna cuts off at 2 minutes.
 - Webhooks are accepted only from Bolna's addresses, behind a secret URL. A refused or lost webhook costs a minute, not a call: the cron reads each call's status from Bolna.
 - The confirmation call is placed only after Approve, once per order, and never places the order itself.
+- A supplier who asks to be called back gets one promise per round, moved into calling hours; Bhaav says the time in words, and times are never mistaken for prices.
+- The owner's number is guarded by the same approved list as suppliers. The owner's spoken choice is read back and needs a clear yes before `approve_quote` runs, exactly as a supplier's quote does; it uses the same approval as the button.
+- The transcript (`turns`) is append-only like the quote book: what Bhaav heard and said can't be edited afterwards.
+- Simulated and practice orders never dial anyone, never count as savings or price memory, and can't be repeated.
 - A cron every minute recovers calls whose webhook never arrived.

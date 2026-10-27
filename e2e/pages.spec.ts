@@ -47,6 +47,7 @@ test('every page names its browser tab', async ({ page }) => {
     ['/prices', 'Price memory · Bhaav'],
     ['/play', 'Be the supplier · Bhaav'],
     ['/bench', 'Test bench · Bhaav'],
+    ['/proof', 'Proof · Bhaav'],
     ['/nope', 'Page not found · Bhaav'],
   ] as const) {
     await page.goto(path);

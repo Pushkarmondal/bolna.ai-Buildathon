@@ -25,6 +25,8 @@ export interface FoundNumber {
   text: string;
   /** True when a currency or "per unit" marker sits next to the number. */
   price: boolean;
+  /** True when a time word follows it ("45 minute", "4 baje"): a time, not a price. */
+  time: boolean;
 }
 
 /** Hindi (romanised and Devanagari) and English spellings for 0 to 99. */
@@ -155,6 +157,13 @@ const AMBIGUOUS = new Set(['saath', 'sath']);
 
 const CURRENCY_WORDS = new Set(
   'rupaye rupaiye rupaya rupay rupees rupee rs inr रुपये रुपए रुपया per prati प्रति rupayi ರೂಪಾಯಿ ರೂ'
+    .split(' ')
+    .map((w) => w.normalize('NFC')),
+);
+
+/** Words that make the number before them a time: "ek ghante baad", "45 minute", "4 बजे". */
+const TIME_WORDS = new Set(
+  'minute minutes min mins hour hours ghanta ghante ghanton baje मिनट घंटा घंटे घंटों बजे ನಿಮಿಷ ಗಂಟೆ'
     .split(' ')
     .map((w) => w.normalize('NFC')),
 );
@@ -366,6 +375,7 @@ export function findNumbers(input: string): FoundNumber[] {
           value: round2(total + current),
           text: text.slice(from.start, to.end),
           price: isPriceContext(text, tokens, first, last),
+          time: TIME_WORDS.has(lower(tokens[last + 1])),
         });
       }
     }
@@ -391,8 +401,9 @@ export function findNumbers(input: string): FoundNumber[] {
       if (token.values.length > 1) {
         flush();
         const price = isPriceContext(text, tokens, i, i);
+        const time = TIME_WORDS.has(lower(tokens[i + 1]));
         for (const value of token.values)
-          out.push({ value: round2(value), text: String(value), price });
+          out.push({ value: round2(value), text: String(value), price, time });
         continue;
       }
       if (first >= 0) flush();
@@ -455,13 +466,15 @@ export function allowedSet(values: Iterable<number>): Set<number> {
 }
 
 /**
- * Numbers in a sentence that Bhaav may not say: not in `allowed`, and not a small count.
- * Counts from 0 to 10 pass ("do minute"), unless they sit next to a price marker ("₹8").
+ * Numbers in a sentence that Bhaav may not say: not in `allowed`, not a small count, not a time.
+ * Counts from 0 to 10 pass ("do minute"), and so do times ("45 minute baad", "4 baje"), unless
+ * they sit next to a price marker ("₹8").
  */
 export function unbackedNumbers(sentence: string, allowed: ReadonlySet<number>): FoundNumber[] {
   return findNumbers(sentence).filter((n) => {
     if (allowed.has(n.value)) return false;
     const smallCount = !n.price && n.value >= 0 && n.value <= 10;
-    return !smallCount;
+    const time = n.time && !n.price;
+    return !smallCount && !time;
   });
 }

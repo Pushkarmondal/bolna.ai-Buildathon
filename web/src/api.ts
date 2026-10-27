@@ -1,4 +1,13 @@
-import type { OrderView, Persona, PricePoint, PriceSeries } from '@bhaav/shared';
+import type {
+  BreakStats,
+  OrderView,
+  Persona,
+  PricePoint,
+  PriceSeries,
+  ProofStats,
+  ScheduleDto,
+  TurnDto,
+} from '@bhaav/shared';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useCallback } from 'react';
 import { isLive } from './format';
@@ -125,6 +134,8 @@ export interface PracticeReview {
   status: string;
   bestOffer: string | null;
   transcript: string | null;
+  /** Turn by turn as the lie-catcher saw it, there before Bolna's own transcript. */
+  turns?: TurnDto[];
   blocked: Array<{ type: string; detail: Record<string, unknown> | null; createdAt: number }>;
   quotes: Array<{ price: number; unit: string; packSize: number | null; supplierWords: string }>;
 }
@@ -146,3 +157,54 @@ export const lastOrder = {
     }
   },
 };
+
+export function useProof() {
+  return useQuery({ queryKey: ['proof'], queryFn: () => api<ProofStats>('/api/proof') });
+}
+
+/** The Break Bhaav scoreboard, refreshed now and then while the practice page is open. */
+export function useBreakStats() {
+  return useQuery({
+    queryKey: ['break-bhaav'],
+    queryFn: () => api<BreakStats>('/api/break-bhaav'),
+    refetchInterval: 30_000,
+  });
+}
+
+export function useSchedules() {
+  return useQuery({ queryKey: ['schedules'], queryFn: () => api<ScheduleDto[]>('/api/schedules') });
+}
+
+/**
+ * The simulations this tab started: only that tab steps it forward, so two tabs watching the
+ * same simulation never both drive it. Storage can be unavailable; then nobody drives it twice.
+ */
+export const simDriver = {
+  is(id: string): boolean {
+    try {
+      return sessionStorage.getItem(`bhaav:sim:${id}`) === '1';
+    } catch {
+      return false;
+    }
+  },
+  set(id: string) {
+    try {
+      sessionStorage.setItem(`bhaav:sim:${id}`, '1');
+    } catch {
+      // Without storage the page cannot drive it; it says so.
+    }
+  },
+};
+
+/** Starts "Watch a full order"; resolves to the simulation to open (a running one, if any). */
+export async function startSimulation(): Promise<string> {
+  try {
+    const { id } = await api<{ id: string }>('/api/simulations', { method: 'POST' });
+    simDriver.set(id);
+    return id;
+  } catch (error) {
+    const running = error instanceof ApiError && (error.body as { id?: string } | null)?.id;
+    if (running) return running;
+    throw error;
+  }
+}

@@ -7,6 +7,7 @@ import type { Unit } from '@bhaav/shared';
 import { and, eq } from 'drizzle-orm';
 import type { Db } from './db/context';
 import { calls, events, quotes, requests, suppliers } from './db/schema';
+import { nextCallingTime } from './dialler';
 import { landedPrice } from './engine';
 import { newId } from './ids';
 import { parseAmount } from './numbers';
@@ -182,6 +183,64 @@ export async function doNotCall(db: Db, params: Params): Promise<ToolResult> {
     });
   }
   return { ok: true, message: 'Noted. Apologise, say we will not call again, and end the call.' };
+}
+
+/** A callback is promised from 10 minutes to 8 hours ahead. */
+const CALLBACK_MINUTES = { min: 10, max: 480 };
+
+/**
+ * The supplier is busy and asked to be called later. Bhaav promises once per supplier per round,
+ * at the time asked (moved into calling hours), and the dialler keeps the promise.
+ */
+export async function callBackLater(
+  db: Db,
+  params: Params,
+  hours: { from: number; to: number },
+  now = Date.now(),
+): Promise<ToolResult> {
+  const callId = param(params, 'call_ref');
+  const call = callId ? await db.select().from(calls).where(eq(calls.id, callId)).get() : undefined;
+  if (!call) return { ok: false, message: 'Noted. Thank them and end the call.' };
+  const minutes = numberParam(params, 'minutes');
+  if (minutes === undefined || minutes <= 0)
+    return { ok: false, message: 'Ask when to call back, in minutes or hours.' };
+  const earlier = await db
+    .select({ callbackAt: calls.callbackAt })
+    .from(calls)
+    .where(
+      and(
+        eq(calls.requestId, call.requestId),
+        eq(calls.supplierId, call.supplierId),
+        eq(calls.round, call.round),
+      ),
+    )
+    .all();
+  if (earlier.some((c) => c.callbackAt))
+    return {
+      ok: false,
+      message:
+        'A callback was already promised. Thank them, say the buyer will call, and end the call.',
+    };
+  const wait = Math.min(Math.max(Math.round(minutes), CALLBACK_MINUTES.min), CALLBACK_MINUTES.max);
+  const at = nextCallingTime(hours, now + wait * 60_000);
+  await db
+    .update(calls)
+    .set({ callbackAt: new Date(at) })
+    .where(eq(calls.id, call.id));
+  const supplier = await db.select().from(suppliers).where(eq(suppliers.id, call.supplierId)).get();
+  await db.insert(events).values({
+    id: newId('evt'),
+    requestId: call.requestId,
+    callId: call.id,
+    type: 'callback',
+    detail: { supplier: supplier?.name ?? null, at, minutes: wait },
+  });
+  return {
+    ok: true,
+    message:
+      'Noted: Bhaav will call back then. Say when in words (for example "एक घंटे बाद"), thank them, and end the call.',
+    callback_at: new Date(at).toISOString(),
+  };
 }
 
 /** The buyer said go: from the Start button or the Desk's start_calls tool. */

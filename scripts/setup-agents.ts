@@ -1,12 +1,14 @@
 // Sets Bhaav up in Bolna: registers the Worker as a custom LLM, then creates (or updates) the
-// Desk, the Caller, and the practice Caller (the Caller cut off at two minutes, for judges).
-// Run after the Worker is deployed.
+// Desk, the Caller, the practice Caller (the Caller cut off at two minutes, for judges) and the
+// owner line (calls the owner with the result). Run after the Worker is deployed.
 //
 //   BOLNA_API_KEY=… WORKER_URL=https://bhaav.<you>.workers.dev LLM_SECRET=… TOOL_SECRET=… \
 //   WEBHOOK_SECRET=… npm run agents:setup
 //
-// Optional: DESK_AGENT_ID / CALLER_AGENT_ID / PRACTICE_AGENT_ID to update existing agents instead
-// of creating new ones; SARVAM_VOICE_ID and SARVAM_VOICE_NAME to pick another bulbul:v4-flash voice.
+// Optional: DESK_AGENT_ID / CALLER_AGENT_ID / PRACTICE_AGENT_ID / OWNER_AGENT_ID to update existing
+// agents instead of creating new ones; SARVAM_VOICE_ID and SARVAM_VOICE_NAME to pick another
+// bulbul:v4-flash voice; OWNER_PHONE (+91…) to give the Caller Bolna's transfer tool, so a supplier
+// who insists on the owner is connected to them (then set BOLNA_HANDOFF = "on").
 // `npm run agents:print` writes the request bodies to bolna/ with secrets masked, and calls nothing.
 
 import { mkdirSync, writeFileSync } from 'node:fs';
@@ -36,23 +38,24 @@ const setup: AgentSetup = {
     id: process.env.SARVAM_VOICE_ID?.trim() || 'aparna_hi_customer',
     name: process.env.SARVAM_VOICE_NAME?.trim() || 'Aparna (Customer)',
   },
+  ownerPhone: process.env.OWNER_PHONE?.trim() || (dry ? '<OWNER_PHONE>' : undefined),
 };
 
 if (dry) {
   mkdirSync('bolna', { recursive: true });
-  for (const kind of ['desk', 'caller', 'caller-graph', 'practice'] as const) {
+  for (const kind of ['desk', 'caller', 'caller-graph', 'practice', 'owner'] as const) {
     writeFileSync(
       `bolna/${kind}-agent.json`,
       `${JSON.stringify(agentBody(kind, setup), null, 2)}\n`,
     );
-    if (kind !== 'desk' && kind !== 'caller') continue;
+    if (kind !== 'desk' && kind !== 'caller' && kind !== 'owner') continue;
     writeFileSync(
       `bolna/${kind}-tools.json`,
       `${JSON.stringify(dashboardTools(kind, setup), null, 2)}\n`,
     );
   }
   console.log(
-    'Wrote bolna/desk-agent.json, bolna/caller-agent.json, bolna/caller-graph-agent.json, bolna/practice-agent.json and the *-tools.json files (secrets masked). The practice agent uses the Caller tools.',
+    'Wrote bolna/{desk,caller,caller-graph,practice,owner}-agent.json and the *-tools.json files (secrets masked). The practice agent uses the Caller tools.',
   );
   process.exit(0);
 }
@@ -99,6 +102,7 @@ const AGENTS = [
     idVar: 'PRACTICE_AGENT_ID',
     setting: 'BOLNA_PRACTICE_AGENT_ID',
   },
+  { kind: 'owner', label: 'Owner line', idVar: 'OWNER_AGENT_ID', setting: 'BOLNA_OWNER_AGENT_ID' },
 ] as const;
 for (const { kind, label, idVar, setting } of AGENTS) {
   const existing = process.env[idVar]?.trim();
@@ -119,6 +123,6 @@ for (const { kind, label, idVar, setting } of AGENTS) {
 
 console.log(`
 Next:
-  1. Put the three ids in worker/wrangler.toml (the lines printed above).
+  1. Put the four ids in worker/wrangler.toml (the lines printed above).${setup.ownerPhone ? '\n     The Caller can connect suppliers to you: also set BOLNA_HANDOFF = "on".' : ''}
   2. npm run build && npm run deploy -w worker
   3. In Bolna, place one test call from each agent before any real supplier call.`);

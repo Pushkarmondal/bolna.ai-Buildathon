@@ -1,8 +1,8 @@
 // Orders as the screens see them, plus the small parsers that turn spoken or typed values
 // (units, phone numbers, dates) into what the database stores.
 
-import type { OrderView, QuoteTerms, RankedQuote, Unit } from '@bhaav/shared';
-import { asc, desc, eq } from 'drizzle-orm';
+import type { OrderView, QuoteTerms, RankedQuote, ScheduleDto, Unit } from '@bhaav/shared';
+import { and, asc, desc, eq } from 'drizzle-orm';
 import type { Db } from './db/context';
 import {
   calls,
@@ -11,9 +11,13 @@ import {
   quotes,
   type RequestRow,
   requests,
+  type ScheduleRow,
+  schedules,
   suppliers,
+  turns,
 } from './db/schema';
 import { landedPrice, UNIT_WORDS } from './engine';
+import { newId } from './ids';
 
 const UNIT_SYNONYMS: Record<string, Unit> = {};
 const synonyms: Array<[Unit, string]> = [
@@ -147,7 +151,7 @@ export async function orderView(db: Db, requestId: string): Promise<OrderView | 
   const request = await db.select().from(requests).where(eq(requests.id, requestId)).get();
   if (!request) return null;
 
-  const [supplierRows, callRows, quoteRows, eventRows] = await Promise.all([
+  const [supplierRows, callRows, quoteRows, eventRows, turnRows, scheduleRow] = await Promise.all([
     db
       .select()
       .from(suppliers)
@@ -173,6 +177,14 @@ export async function orderView(db: Db, requestId: string): Promise<OrderView | 
       .orderBy(desc(events.createdAt))
       .limit(200)
       .all(),
+    db
+      .select()
+      .from(turns)
+      .where(eq(turns.requestId, requestId))
+      .orderBy(asc(turns.createdAt))
+      .limit(400)
+      .all(),
+    db.select().from(schedules).where(eq(schedules.requestId, requestId)).get(),
   ]);
 
   const order = orderOf(request);
@@ -229,6 +241,9 @@ export async function orderView(db: Db, requestId: string): Promise<OrderView | 
       status: request.status,
       approvedQuoteId: request.approvedQuoteId,
       isPractice: request.isPractice,
+      isSimulation: request.isSimulation,
+      buyerPhone: request.buyerPhone,
+      ownerUpdates: request.ownerUpdates,
       createdAt: request.createdAt.getTime(),
     },
     suppliers: supplierRows.map((s) => ({
@@ -252,6 +267,7 @@ export async function orderView(db: Db, requestId: string): Promise<OrderView | 
       endedAt: ms(c.endedAt),
       attempt: c.attempt,
       retryable: c.retryable,
+      callbackAt: ms(c.callbackAt),
     })),
     quotes: quoteRows.map((q) => ({
       id: q.id,
@@ -286,5 +302,85 @@ export async function orderView(db: Db, requestId: string): Promise<OrderView | 
     // The routes fill these in from the dialler's settings (index.ts, viewOf).
     waitingFor: null,
     callHours: { from: 10, to: 19 },
+    turns: turnRows.map((t) => ({
+      id: t.id,
+      callId: t.callId,
+      heard: t.heard,
+      said: t.said,
+      stopped: t.stopped,
+      numbers: t.numbers as OrderView['turns'][number]['numbers'],
+      thinkMs: t.thinkMs,
+      createdAt: t.createdAt.getTime(),
+    })),
+    schedule: scheduleRow ? scheduleDto(scheduleRow, request.item) : null,
   };
+}
+
+const IST_MS = 330 * 60_000;
+
+/** The next time a weekly schedule runs, as epoch ms; null while it is paused. */
+export function nextRun(
+  schedule: Pick<ScheduleRow, 'weekday' | 'hour' | 'active' | 'lastRunOn'>,
+  now = Date.now(),
+): number | null {
+  if (!schedule.active) return null;
+  const today = new Date(now + IST_MS);
+  // Two weeks ahead: the day it last ran may itself be a week ahead of today's date.
+  for (let days = 0; days <= 14; days++) {
+    const day = Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate() + days);
+    if (new Date(day).getUTCDay() !== schedule.weekday) continue;
+    if (schedule.lastRunOn === new Date(day).toISOString().slice(0, 10)) continue;
+    // A slot earlier today that has not run yet is due now: the cron takes it within a minute.
+    return day + schedule.hour * 3_600_000 - IST_MS;
+  }
+  return null;
+}
+
+/** Whether a weekly schedule should make this week's order now. */
+export function scheduleDue(
+  schedule: Pick<ScheduleRow, 'weekday' | 'hour' | 'active' | 'lastRunOn'>,
+  now = Date.now(),
+): boolean {
+  const at = nextRun(schedule, now);
+  return at !== null && at <= now;
+}
+
+export function scheduleDto(row: ScheduleRow, item: string | null): ScheduleDto {
+  return {
+    id: row.id,
+    requestId: row.requestId,
+    item,
+    weekday: row.weekday,
+    hour: row.hour,
+    callOwnerFirst: row.callOwnerFirst,
+    active: row.active,
+    nextRun: nextRun(row),
+  };
+}
+
+/**
+ * The buyer's choice, from the screen or by voice on the owner line. Only once every call is
+ * done, and only a quote on this order. The one place an order becomes approved.
+ */
+export async function approveQuote(
+  db: Db,
+  requestId: string,
+  quoteId: string,
+  by: 'screen' | 'voice',
+): Promise<{ ok: true } | { ok: false; status: 400 | 404 | 409; error: string }> {
+  const request = await db.select().from(requests).where(eq(requests.id, requestId)).get();
+  if (!request) return { ok: false, status: 404, error: 'No such order.' };
+  if (request.status !== 'done')
+    return { ok: false, status: 409, error: 'Approve once all calls are finished.' };
+  const quote = await db.select().from(quotes).where(eq(quotes.id, quoteId)).get();
+  if (quote?.requestId !== requestId)
+    return { ok: false, status: 400, error: 'That quote is not on this order.' };
+  await db
+    .update(requests)
+    .set({ status: 'approved', approvedQuoteId: quoteId })
+    .where(and(eq(requests.id, requestId), eq(requests.status, 'done')));
+  await db
+    .insert(events)
+    .values({ id: newId('evt'), requestId, type: 'approved', detail: { quoteId, by } });
+  return { ok: true };
 }

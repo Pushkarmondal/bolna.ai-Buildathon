@@ -47,6 +47,9 @@ export const EVENT_TYPES = [
   'do_not_call',
   'practice_started',
   'desk_started',
+  'callback',
+  'owner_call',
+  'schedule_run',
 ] as const;
 export type EventType = (typeof EVENT_TYPES)[number];
 
@@ -103,6 +106,12 @@ export interface OrderDto {
   status: RequestStatus;
   approvedQuoteId: string | null;
   isPractice: boolean;
+  /** A "Watch a full order" run: pretend suppliers, the real AI and lie-catcher. */
+  isSimulation: boolean;
+  /** The owner's own number, for Bhaav to call them. */
+  buyerPhone: string | null;
+  /** Call the owner with the result, to approve by voice. */
+  ownerUpdates: boolean;
   createdAt: number;
 }
 
@@ -119,7 +128,7 @@ export interface CallDto {
   id: string;
   supplierId: string;
   round: number;
-  channel: 'phone' | 'web';
+  channel: 'phone' | 'web' | 'sim';
   status: CallStatus;
   bestOfferSaid: string | null;
   recordingUrl: string | null;
@@ -130,6 +139,32 @@ export interface CallDto {
   attempt: number;
   /** Bolna refused to place it for a passing reason; Bhaav tries again (3 tries in all). */
   retryable: boolean;
+  /** The supplier asked to be called back: when Bhaav promised to (epoch ms). */
+  callbackAt: number | null;
+}
+
+/** A number Bhaav said, and where it came from. */
+export interface SpokenNumber {
+  value: number;
+  /** As written in the sentence. */
+  text: string;
+  /** book: in the quote book or the order; heard: only the other person said it; stopped: blocked. */
+  source: 'book' | 'heard' | 'stopped';
+  /** Whether its sentence was a question (a read-back), not a statement. */
+  question: boolean;
+}
+
+/** One turn of a call: what the other person said, and what Bhaav said back. */
+export interface TurnDto {
+  id: string;
+  callId: string | null;
+  heard: string | null;
+  said: string;
+  /** The sentence the lie-catcher stopped in this turn, if any. */
+  stopped: string | null;
+  numbers: SpokenNumber[];
+  thinkMs: number | null;
+  createdAt: number;
 }
 
 export interface QuoteDto {
@@ -196,9 +231,66 @@ export interface OrderView {
   /** What still stops calls from starting. Empty when ready. */
   missing: string[];
   /** Why no call is live while calls are under way; null when the next call is on its way. */
-  waitingFor: 'hours' | 'another_call' | 'retry' | null;
+  waitingFor: 'hours' | 'another_call' | 'retry' | 'callback' | null;
   /** India-time hours when suppliers may be called: from 10 to 19 is 10:00 to 19:00. */
   callHours: { from: number; to: number };
+  /** Every turn of every call, oldest first: the live transcript. */
+  turns: TurnDto[];
+  /** This order's weekly repeat, if it has one. */
+  schedule: ScheduleDto | null;
+}
+
+/** An order repeated every week. */
+export interface ScheduleDto {
+  id: string;
+  requestId: string;
+  item: string | null;
+  /** 0 is Sunday. */
+  weekday: number;
+  hour: number;
+  callOwnerFirst: boolean;
+  active: boolean;
+  /** Epoch ms of the next run, in India time. */
+  nextRun: number | null;
+}
+
+/** The proof page: what Bhaav did on real orders, from the database. */
+export interface ProofStats {
+  orders: number;
+  savedRupees: number;
+  /** Average saving against the costliest quote heard, in %. */
+  savedPercent: number | null;
+  calls: { placed: number; answered: number; withQuote: number };
+  /** Quotes whose price appears in the supplier's own words. */
+  quotes: { total: number; inTheirWords: number };
+  /** Every number Bhaav spoke on any call, practice included. */
+  numbers: {
+    checked: number;
+    fromBook: number;
+    readBack: number;
+    stopped: number;
+    possibleSlips: number;
+  };
+  /** Server time to Bhaav's first words, in ms. */
+  thinkMs: { median: number | null; p90: number | null; turns: number };
+}
+
+/** "Break Bhaav": what judges tried on practice calls, and what the lie-catcher did. */
+export interface BreakStats {
+  calls: number;
+  turns: number;
+  stopped: number;
+  /** Statements repeating a number only the judge said: possible slips, shown so they can be checked. */
+  possibleSlips: number;
+  tricks: Array<{
+    callId: string;
+    persona: string;
+    heard: string | null;
+    stopped: string | null;
+    said: string;
+    slip: boolean;
+    createdAt: number;
+  }>;
 }
 
 export interface Persona {
