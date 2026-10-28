@@ -437,14 +437,20 @@ export async function advance(
  * Advances one order, then every other order left waiting (for calling hours, for another
  * order's call to end, or to retry). Run when a call ends and from the cron.
  */
+/**
+ * Waiting orders advanced per run. Each costs about seven database queries, and Cloudflare's free
+ * plan allows 50 subrequests (queries and fetches) per request; the cron takes the rest next minute.
+ */
+export const WAITING_PER_RUN = 4;
+
 export async function advanceWaiting(
   env: DiallerEnv,
   db: Db,
   first: string | null = null,
 ): Promise<void> {
   if (first) await advance(env, db, first).catch(() => undefined);
-  for (const requestId of await stalledRequests(db)) {
-    if (requestId === first) continue;
+  const others = (await stalledRequests(db)).filter((id) => id !== first);
+  for (const requestId of others.slice(0, WAITING_PER_RUN)) {
     try {
       await advance(env, db, requestId);
     } catch {
@@ -676,29 +682,32 @@ export async function waitingReason(
   return null;
 }
 
-/** Orders mid-call with no live call: a lost webhook would otherwise leave them stuck. */
+/**
+ * Orders mid-call with no live call, oldest first: a lost webhook would otherwise leave them
+ * stuck. Two queries however many orders there are (the live calls come from the partial index).
+ */
 export async function stalledRequests(db: Db): Promise<string[]> {
-  const active = await db
-    .select()
-    .from(requests)
-    .where(
-      and(
-        inArray(requests.status, ['calling', 'bargaining']),
-        eq(requests.isPractice, false),
-        eq(requests.isSimulation, false),
-      ),
-    )
-    .all();
-  const stalled: string[] = [];
-  for (const r of active) {
-    const live = await db
-      .select({ id: calls.id })
+  const [active, live] = await Promise.all([
+    db
+      .select({ id: requests.id })
+      .from(requests)
+      .where(
+        and(
+          inArray(requests.status, ['calling', 'bargaining']),
+          eq(requests.isPractice, false),
+          eq(requests.isSimulation, false),
+        ),
+      )
+      .orderBy(requests.createdAt)
+      .all(),
+    db
+      .select({ requestId: calls.requestId })
       .from(calls)
       .where(
-        and(eq(calls.requestId, r.id), eq(calls.channel, 'phone'), inArray(calls.status, LIVE)),
+        sql`${calls.channel} = 'phone' and ${calls.status} in ('scheduled', 'queued', 'rescheduled', 'initiated', 'ringing', 'in-progress', 'call-disconnected')`,
       )
-      .get();
-    if (!live) stalled.push(r.id);
-  }
-  return stalled;
+      .all(),
+  ]);
+  const busy = new Set(live.map((c) => c.requestId));
+  return active.map((r) => r.id).filter((id) => !busy.has(id));
 }

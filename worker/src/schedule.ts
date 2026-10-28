@@ -135,6 +135,9 @@ export async function runSchedules(
   const started: string[] = [];
   for (const s of await db.select().from(schedules).where(eq(schedules.active, true)).all()) {
     if (!scheduleDue(s, now)) continue;
+    // One a minute: starting an order is about 20 queries, and a request may make 50 on the free
+    // plan. Another one due stays due, and the next minute's cron starts it.
+    if (started.length > 0) break;
     // Marked first, so a slow run can never make two orders for one day.
     await db
       .update(schedules)

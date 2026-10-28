@@ -50,25 +50,48 @@ export async function allowedNumbersFor(db: Db, ref: string | null): Promise<num
  * Appends a lie-catcher event; a reference that matches nothing is kept in the detail only. A
  * turn goes to the transcript (`turns`) instead of the events log.
  */
-export async function recordEvent(db: Db, event: CatcherEvent): Promise<void> {
-  let requestId: string | null = null;
-  let callId: string | null = null;
-  if (event.callRef?.startsWith('req_')) {
+type Resolved = { requestId: string | null; callId: string | null };
+
+/** The order and call a reference names; null for one that matches nothing. */
+async function resolve(db: Db, ref: string | null | undefined): Promise<Resolved> {
+  if (ref?.startsWith('req_')) {
     const request = await db
       .select({ id: requests.id })
       .from(requests)
-      .where(eq(requests.id, event.callRef))
+      .where(eq(requests.id, ref))
       .get();
-    requestId = request?.id ?? null;
-  } else if (event.callRef) {
+    return { requestId: request?.id ?? null, callId: null };
+  }
+  if (ref) {
     const call = await db
       .select({ id: calls.id, requestId: calls.requestId })
       .from(calls)
-      .where(eq(calls.id, event.callRef))
+      .where(eq(calls.id, ref))
       .get();
-    requestId = call?.requestId ?? null;
-    callId = call?.id ?? null;
+    return { requestId: call?.requestId ?? null, callId: call?.id ?? null };
   }
+  return { requestId: null, callId: null };
+}
+
+/**
+ * Records events for one request, looking each reference up once: a busy Groq can bring several
+ * events in one turn, and every query counts toward Cloudflare's 50 subrequests a request.
+ */
+export function eventRecorder(db: Db) {
+  const seen = new Map<string, Promise<Resolved>>();
+  return (event: CatcherEvent) => {
+    const key = event.callRef ?? '';
+    if (!seen.has(key)) seen.set(key, resolve(db, event.callRef));
+    return recordEvent(db, event, seen.get(key));
+  };
+}
+
+export async function recordEvent(
+  db: Db,
+  event: CatcherEvent,
+  resolved: Promise<Resolved> = resolve(db, event.callRef),
+): Promise<void> {
+  const { requestId, callId } = await resolved;
   if (event.type === 'turn') {
     await db.insert(turns).values({
       id: newId('turn'),

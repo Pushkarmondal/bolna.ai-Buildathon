@@ -22,7 +22,8 @@
     "agents:setup": "tsx scripts/setup-agents.ts",
     "bench": "tsx bench/run.ts",
     "fake-bolna": "tsx scripts/fake-bolna.ts",
-    "e2e": "npm run build && playwright test"
+    "e2e": "npm run build && playwright test",
+    "smoke": "tsx scripts/smoke.ts"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.15",

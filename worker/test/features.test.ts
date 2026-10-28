@@ -10,7 +10,7 @@ import { drizzle } from 'drizzle-orm/d1';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { calls, events, requests, schedules } from '../src/db/schema';
 import { diallerEnv } from '../src/dialler';
-import worker from '../src/index';
+import worker, { sweep } from '../src/index';
 import { ownerEnv } from '../src/owner';
 import { runSchedules } from '../src/schedule';
 
@@ -563,5 +563,114 @@ describe('edges found in review', () => {
     const { ownerResultsDue } = await import('../src/owner');
     await ownerResultsDue(ownerEnv(env), db);
     expect(bolna.placed.filter((p) => p.agent_id === 'agent-owner')).toHaveLength(0);
+  });
+});
+
+/**
+ * Cloudflare's free plan allows 50 subrequests per request, and every D1 query counts as one,
+ * as does every fetch to Groq or Bolna. Local runs don't enforce it, so it is counted here.
+ */
+describe("Cloudflare's free-plan budget of 50 subrequests a request", () => {
+  function counting(d1: D1Database) {
+    let n = 0;
+    const wrapped = new Proxy(d1, {
+      get(target, prop) {
+        const value = Reflect.get(target, prop);
+        if (prop === 'prepare' || prop === 'batch' || prop === 'exec')
+          return (...args: unknown[]) => {
+            n++;
+            return (value as (...a: unknown[]) => unknown).apply(target, args);
+          };
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+    return { db: wrapped as D1Database, count: () => n };
+  }
+
+  async function measured(
+    path: string,
+    init: RequestInit & { json?: unknown } = {},
+    settings: Record<string, string> = {},
+  ): Promise<number> {
+    const c = counting(env.DB);
+    const before = vi.mocked(globalThis.fetch).mock.calls.length;
+    const headers = new Headers(init.headers);
+    if (cookie) headers.set('cookie', cookie);
+    if (init.json !== undefined) headers.set('content-type', 'application/json');
+    const request = new Request(`https://bhaav.test${path}`, {
+      ...init,
+      headers,
+      body: init.json !== undefined ? JSON.stringify(init.json) : init.body,
+    });
+    const ctx = createExecutionContext();
+    const res = await worker.fetch(
+      request,
+      { ...env, ...settings, DB: c.db } as Cloudflare.Env,
+      ctx,
+    );
+    await res.text();
+    await waitOnExecutionContext(ctx);
+    return c.count() + vi.mocked(globalThis.fetch).mock.calls.length - before;
+  }
+
+  it('keeps every simulation step inside it, even when Groq is busy on every turn', async () => {
+    fake();
+    // The first two models answer 429 every time: the worst case on Groq's free plan.
+    const scripted = vi.mocked(globalThis.fetch).getMockImplementation();
+    vi.mocked(globalThis.fetch).mockImplementation(async (input, init) => {
+      const url = input instanceof Request ? input.url : String(input);
+      if (url.endsWith('/chat/completions') && !String(init?.body).includes('qwen'))
+        return new Response('busy', { status: 429 });
+      return scripted ? scripted(input, init) : new Response('', { status: 500 });
+    });
+    // A finished earlier simulation would hold the stage, so close any that are open.
+    await db.update(requests).set({ status: 'done' }).where(eq(requests.isSimulation, true));
+    const res = await send('/api/simulations', { method: 'POST' });
+    const { id } = await res.json<{ id: string }>();
+    let worst = 0;
+    for (let i = 0; i < 200; i++) {
+      worst = Math.max(worst, await measured(`/api/simulations/${id}/step`, { method: 'POST' }));
+      if ((await view(id)).order.status === 'done') break;
+    }
+    expect((await view(id)).order.status).toBe('done');
+    expect(worst).toBeLessThanOrEqual(45);
+  });
+
+  it('keeps a webhook inside it however many orders wait for the line', async () => {
+    fake();
+    const one = { MAX_LIVE_CALLS: '1' };
+    const first = await order(2, 'budget first');
+    await send(`/api/requests/${first}/start`, { method: 'POST' }, one);
+    for (let w = 0; w < 8; w++) {
+      const o = await order(1, `budget waiting ${w}`);
+      await send(`/api/requests/${o}/start`, { method: 'POST' }, one);
+    }
+    const live = (await view(first)).calls.at(-1);
+    const used = await measured(
+      '/webhooks/bolna/test-hook-secret',
+      {
+        method: 'POST',
+        json: { id: 'x', status: 'completed', context_details: { call_ref: live?.id } },
+      },
+      one,
+    );
+    expect(used).toBeLessThanOrEqual(45);
+    // And the cron, with the same queue.
+    const c = counting(env.DB);
+    const before = vi.mocked(globalThis.fetch).mock.calls.length;
+    await sweep({ ...env, ...one, DB: c.db } as Cloudflare.Env);
+    expect(c.count() + vi.mocked(globalThis.fetch).mock.calls.length - before).toBeLessThanOrEqual(
+      45,
+    );
+    await db.update(requests).set({ status: 'done' }).where(eq(requests.status, 'calling'));
+  });
+
+  it('keeps the screens light', async () => {
+    fake();
+    const id = await order(3, 'budget view');
+    await send(`/api/requests/${id}/start`, { method: 'POST' });
+    expect(await measured(`/api/requests/${id}`)).toBeLessThanOrEqual(10);
+    expect(await measured('/api/proof')).toBeLessThanOrEqual(10);
+    expect(await measured('/api/break-bhaav')).toBeLessThanOrEqual(5);
   });
 });

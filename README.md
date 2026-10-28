@@ -110,7 +110,7 @@ For frontend work with hot reload, also run `npm run dev:web` and open http://lo
 ## Checks
 
 ```bash
-npm test            # 173 Worker tests (Workers runtime, local D1, faked Bolna) + 30 web tests
+npm test            # 176 Worker tests (Workers runtime, local D1, faked Bolna) + 30 web tests
 npm run typecheck   # every package, plus scripts, bench and e2e
 npm run lint
 npm run e2e         # builds, then runs 39 Playwright tests in your installed Chrome: journeys, the simulation, the owner line, links, fit at 9 widths, contrast
@@ -133,14 +133,27 @@ npm run bench -- --dry   # the bench harness, scripted, no network
    for name in GROQ_API_KEY LLM_SECRET BOLNA_API_KEY TOOL_SECRET WEBHOOK_SECRET APP_PASSCODE COOKIE_SECRET; do npx wrangler secret put $name; done
    ```
 4. **Deploy** (from the repo root): `npm run build && npm run deploy -w worker`. Note the `https://bhaav.<you>.workers.dev` URL.
+   **Check it from the outside** with the same secrets in your shell (nothing is printed back):
+   ```bash
+   BHAAV_URL=https://bhaav.<you>.workers.dev APP_PASSCODE=… LLM_SECRET=… TOOL_SECRET=… npm run smoke
+   ```
+   It checks the pages and their headers, the passcode, each secret by the door it opens, Groq through the real lie-catcher, and the screens' API. Add `-- --simulate` to also play one whole "Watch a full order" with the real AI (about 40 Groq calls).
 5. **Create the Bolna agents:**
    ```bash
    WORKER_URL=https://bhaav.<you>.workers.dev BOLNA_API_KEY=… LLM_SECRET=… TOOL_SECRET=… WEBHOOK_SECRET=… OWNER_PHONE=+91… npm run agents:setup
    ```
    Put the four printed ids in `worker/wrangler.toml` (`BOLNA_DESK_AGENT_ID`, `BOLNA_CALLER_AGENT_ID`, `BOLNA_PRACTICE_AGENT_ID`, `BOLNA_OWNER_AGENT_ID`). With `OWNER_PHONE`, the Caller gets Bolna's transfer tool, so a supplier who insists on the owner is connected to that number; then set `BOLNA_HANDOFF = "on"`. Bolna fixes the transfer number in the tool, so it is one owner per deployment. Add `--graph` to create the Caller as a Bolna graph agent (greet, ask, read back, bargain, confirm, close) instead of a single prompt. If Bolna refuses the API body, `npm run agents:print` writes `bolna/*-agent.json` and `bolna/*-tools.json` to paste into the dashboard instead.
 6. **Set the limits** in `worker/wrangler.toml`. `SUPPLIER_ALLOWLIST` lists the numbers of suppliers who agreed, plus your own for the owner line; until it is set, no supplier can be added. Check `MAX_CALLS_PER_DAY` and `CALL_HOURS`. Then deploy again.
-7. **Test** in this order: a test call from each agent in Bolna's dashboard; Watch a full order (needs only Groq); Talk in the app; Be the supplier; "Call me" on an order; then one real supplier who agreed.
+7. **Test** in this order: a test call from each agent in Bolna's dashboard; Watch a full order (needs only Groq); Talk in the app; Be the supplier; "Call me" on an order; then one real supplier who agreed. Keep `npx wrangler tail` (inside `worker/`) open while you do: it shows every error, and a `webhook refused from …` line means Bolna's webhooks come from an address not in `BOLNA_WEBHOOK_IPS` (calls still finish, a minute slower; add the address).
 8. **Bench:** `GROQ_API_KEY=… npm run bench`, then `npm run build && npm run deploy -w worker` to publish the results on `/bench`. Fifty chats use more than one day of Groq's free allowance, so run them over two days, or with `BENCH_RUNS=25`.
+
+### Free plans and their limits
+
+Everything runs on free plans, with three limits worth knowing before judging week:
+
+- **Cloudflare Workers, free:** 100,000 requests a day, and 50 subrequests a request (every database query and every call to Groq or Bolna counts). Bhaav stays within 45 on its heaviest paths, measured by `worker/test/features.test.ts`, by advancing at most 4 waiting orders a minute and starting at most one weekly order a minute. The $5-a-month Workers Paid plan lifts both limits; worth it for the judging week.
+- **Groq, free:** about 600,000 tokens a day across the three models. A real call uses about 20 turns, a simulation about 40, the 50-chat bench about 1,000. When Groq is busy Bhaav says its safe line instead of going silent; Groq's pay-as-you-go plan removes the limit.
+- **Bolna, trial:** verified numbers only and two calls at once. A $15 top-up removes both.
 
 ## Settings
 

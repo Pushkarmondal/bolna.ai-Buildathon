@@ -19,7 +19,7 @@ import {
   startSession,
 } from './auth';
 import { type Execution, findCallRef, getExecution, mintWebSession } from './bolna';
-import { allowedNumbersFor, type Db, recordEvent } from './db/context';
+import { allowedNumbersFor, type Db, eventRecorder } from './db/context';
 import { calls, events, loginAttempts, quotes, requests, suppliers, turns } from './db/schema';
 import {
   advance,
@@ -80,7 +80,7 @@ function catcherDeps(c: Context<Env>, db: Db): CatcherDeps {
       .map((m) => m.trim())
       .filter(Boolean),
     allowedFor: (ref) => allowedNumbersFor(db, ref),
-    record: (event) => recordEvent(db, event),
+    record: eventRecorder(db),
     waitUntil: (promise) => c.executionCtx.waitUntil(promise),
   };
 }
